@@ -1,0 +1,91 @@
+.analysis-progress-inline-wrap {
+  display: grid;
+  gap: 5px;
+}
+
+.analysis-progress-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 29px;
+  padding: 6px 10px;
+  color: var(--color-info-foreground);
+  background: var(--color-info-background);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.analysis-progress-inline strong {
+  min-width: 34px;
+  text-align: right;
+}
+
+.analysis-progress-inline__track {
+  width: 76px;
+  height: 6px;
+  overflow: hidden;
+  background: var(--color-info-border);
+  border-radius: 999px;
+}
+
+.analysis-progress-inline__track span {
+  display: block;
+  height: 100%;
+  background: var(--color-info-foreground);
+  border-radius: inherit;
+  transition: width 300ms ease;
+}
+
+.analysis-progress-inline-wrap--completed .analysis-progress-inline {
+  color: var(--color-success-foreground);
+  background: var(--color-success-background);
+}
+
+.analysis-progress-inline-wrap--completed .analysis-progress-inline__track {
+  background: var(--color-success-border);
+}
+
+.analysis-progress-inline-wrap--completed .analysis-progress-inline__track span {
+  background: var(--color-success-foreground);
+}
+
+.analysis-progress-inline-wrap--failed .analysis-progress-inline {
+  color: var(--color-danger-foreground);
+  background: var(--color-danger-background);
+}
+
+.analysis-progress-inline-wrap--failed .analysis-progress-inline__track {
+  background: var(--color-danger-border);
+}
+
+.analysis-progress-inline-wrap--failed .analysis-progress-inline__track span {
+  background: var(--color-danger-foreground);
+}
+
+.analysis-progress-inline-wrap--cancelled .analysis-progress-inline {
+  color: var(--color-text-soft);
+  background: var(--color-surface-muted);
+}
+
+.analysis-progress-inline__error {
+  padding-left: 10px;
+  color: var(--color-danger-foreground);
+  font-size: 0.75rem;
+}
+
+.analysis-progress-inline--state {
+  color: var(--color-text-soft);
+  background: var(--color-surface-muted);
+}
+
+.analysis-progress-inline--error {
+  color: var(--color-danger-foreground);
+  background: var(--color-danger-background);
+}
+
+@media (max-width: 700px) {
+  .analysis-progress-inline__track {
+    width: 58px;
+  }
+}

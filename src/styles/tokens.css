@@ -1,0 +1,52 @@
+:root {
+  --color-primary: #5B68D6;
+  --color-primary-deep: #4855B8;
+  --color-primary-soft: #EEF0FF;
+  --color-primary-border: #C7CDF8;
+  --color-background: #F6F8FC;
+  --color-surface: #FFFFFF;
+  --color-surface-subtle: #F8FAFC;
+  --color-surface-muted: #F1F4F9;
+  --color-sidebar: #252A3D;
+  --color-sidebar-text: #CBD2E3;
+  --color-sidebar-muted: #929AB2;
+  --color-text: #172033;
+  --color-text-soft: #475467;
+  --color-muted: #667085;
+  --color-border: #E3E8F2;
+  --color-focus: #818CF8;
+  --color-on-primary: #FFFFFF;
+
+  --color-success-foreground: #166534;
+  --color-success-background: #F0FDF4;
+  --color-success-border: #BBF7D0;
+  --color-warning-foreground: #92400E;
+  --color-warning-background: #FFFBEB;
+  --color-warning-border: #FDE68A;
+  --color-danger-foreground: #991B1B;
+  --color-danger-background: #FEF2F2;
+  --color-danger-border: #FECACA;
+  --color-info-foreground: #1E40AF;
+  --color-info-background: #EFF6FF;
+  --color-info-border: #BFDBFE;
+
+  --font-interface: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-size-base: 16px;
+  --font-size-root: 16px;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --shadow-card: 0 18px 48px rgba(23, 32, 51, 0.10);
+
+  --graph-node-paper: #BDD7FF;
+  --graph-node-author: #DCCBFF;
+  --graph-node-concept: #AEEBE7;
+  --graph-node-method: #FFE0A8;
+  --graph-node-finding: #C5E8C9;
+  --graph-edge: #94A3B8;
+  --graph-selected-border: #FFFFFF;
+}
+
+:root {
+  font-size: var(--font-size-root);
+}

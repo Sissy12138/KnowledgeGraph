@@ -1,0 +1,135 @@
+.paper-detail-page {
+  width: min(940px, 100%);
+  margin: 0 auto;
+}
+
+.paper-detail-page__back,
+.paper-detail-state a {
+  color: var(--color-primary-deep);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.paper-detail-page__back:hover,
+.paper-detail-state a:hover {
+  text-decoration: underline;
+}
+
+.paper-detail-page__hero,
+.paper-detail-section,
+.paper-detail-state {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.paper-detail-page__hero {
+  margin-top: 22px;
+  padding: 38px;
+}
+
+.paper-detail-page__eyebrow {
+  margin: 0 0 10px;
+  color: var(--color-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.paper-detail-page h1 {
+  max-width: 780px;
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.1rem);
+  line-height: 1.2;
+}
+
+.paper-detail-page__authors,
+.paper-detail-page__muted {
+  color: var(--color-muted);
+}
+
+.paper-detail-page__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.paper-detail-page__meta span {
+  padding: 7px 11px;
+  background: var(--color-surface-muted);
+  border-radius: 999px;
+  color: var(--color-text-soft);
+  font-size: 0.84rem;
+}
+
+.paper-detail-section {
+  margin-top: 18px;
+  padding: 30px 38px;
+}
+
+.paper-detail-section h2 {
+  margin: 0 0 18px;
+  font-size: 1.2rem;
+}
+
+.paper-detail-section > p {
+  margin: 0;
+  line-height: 1.8;
+}
+
+.research-overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.research-overview div {
+  padding: 18px;
+  background: var(--color-surface-subtle);
+  border-radius: var(--radius-card);
+}
+
+.research-overview div:last-child {
+  grid-column: 1 / -1;
+}
+
+.research-overview dt {
+  margin-bottom: 8px;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.research-overview dd {
+  margin: 0;
+  line-height: 1.65;
+}
+
+.paper-detail-state {
+  display: grid;
+  gap: 10px;
+  min-height: 260px;
+  place-content: center;
+  width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 32px;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .paper-detail-page__hero,
+  .paper-detail-section {
+    padding: 24px;
+  }
+
+  .research-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .research-overview div:last-child {
+    grid-column: auto;
+  }
+}
