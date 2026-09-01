@@ -202,8 +202,9 @@ git commit -m "feat: migrate papers to v05 contract"
 - Create: `src/features/suggestions/suggestion.adapter.test.ts`
 
 **Interfaces:**
-- Consumes: `SuggestionPageDto`、`AcceptSuggestionRequestDto`、`RejectSuggestionRequestDto`、`ApiClientError`。
-- Produces: `toSuggestionPageView(dto)`，按 `evidenceIds` 和 `paperId` 连接当前页池。
+- Consumes: `SuggestionPageDto`、`ExtractionDto`、`AcceptSuggestionRequestDto`、`RejectSuggestionRequestDto`、`ApiClientError`。
+- Produces: `loadLatestExtraction(paperId): Promise<ExtractionDto>`，对应 `GET /api/v1/papers/{paperId}/extractions/latest`。
+- Produces: `toSuggestionPageView(dto, latestExtractionsByPaperId)`，按 `evidenceIds` 和 `paperId` 连接当前页池，并从同一 `extractionId` 的最新 Extraction 连接待审核候选。
 - Produces: `getDefaultCandidateIds(suggestion)`，只返回 `defaultCandidateId` 或 `[]`。
 - Produces: `buildAcceptSuggestionRequest(suggestion, selectedIds, labelOverrides, comment)`。
 
@@ -222,11 +223,17 @@ it('builds the v05 multi-match request without silently remapping New', () => {
   })
 })
 
-it('joins page-scoped paper and evidence pools', () => {
-  const page = toSuggestionPageView(suggestionPageDto)
+it('joins page-scoped paper, evidence and current extraction candidate pools', () => {
+  const page = toSuggestionPageView(suggestionPageDto, { 'paper-1': latestExtractionDto })
   expect(page.items[0].paperTitle).toBe('Paper A')
   expect(page.items[0].evidence.map((item) => item.id)).toEqual(['ev-1'])
+  expect(page.items[0].candidates.map((item) => item.id)).toEqual(['candidate-1'])
   expect(page.statusCounts.superseded).toBe(1)
+})
+
+it('blocks a pending review when the latest extraction no longer matches', () => {
+  const page = toSuggestionPageView(suggestionPageDto, { 'paper-1': newerExtractionDto })
+  expect(page.items[0]).toMatchObject({ canReview: false, candidateState: 'staleExtraction' })
 })
 ```
 
@@ -265,7 +272,7 @@ export function buildAcceptSuggestionRequest(
 }
 ```
 
-Mock service 返回完整 `SuggestionPageDto`，包括 `evidence/papers/statusCounts`；批量操作继续 `Promise.allSettled`，每条 resolve 仅用自己的 `defaultCandidateId`，没有默认项则跳过。
+Mock service 返回完整 `SuggestionPageDto`，包括 `evidence/papers/statusCounts`；对当前页涉及的论文按 ID 去重后加载最新 Extraction。待审核 resolve 建议仅在 `suggestion.extractionId === extraction.id` 时连接候选，否则标记 `staleExtraction`、禁用 accept 并提示刷新。accepted/rejected 历史项使用 `executionResult` 展示最终目标，不伪造 v05 未公开的旧候选。批量操作继续 `Promise.allSettled`，每条 resolve 仅用自己的 `defaultCandidateId`，没有默认项则跳过。
 
 - [ ] **Step 4: 运行逻辑和服务测试并确认 GREEN**
 
@@ -363,7 +370,8 @@ git commit -m "feat: align suggestion review UI with v05"
 
 **Interfaces:**
 - Consumes: `GraphResponseDto` 及 Paper/Author/Concept/Method 详情加载器。
-- Produces: `GraphDatasetView`（现 `GraphDataset` 的明确 ViewModel 名称）、`toGraphDatasetView(view, responses, detailPools)`。
+- Produces: `GraphDatasetView`（现 `GraphDataset` 的明确 ViewModel 名称），其中 `formalEdges` 保存适配所需的全部 v05 关系，`nodes/edges` 只保存当前基础视图实际展示的节点和边，`contextOverlay` 保存派生展示关系。
+- Produces: `toGraphDatasetView(view, responses, detailPools)`。
 - Produces: `createGraphDetailCache(loaders)`，同一类型/ID 会话内只加载一次。
 - Produces: `GraphFocusDependencies = { listConcepts(): Promise<PageResult<ConceptSummaryDto>>; listMethods(): Promise<PageResult<MethodSummaryDto>>; listPapers(input: { sortBy: 'year'; sortOrder: 'desc' }): Promise<PageResult<PaperSummaryDto>> }`。
 - Produces: `getInitialGraphFocus(view, dependencies)`，concept/method/paper 取对应列表首项；author 取论文首项中最小 `authorOrder` 的 `authorId`；空列表返回 `null`。
@@ -373,7 +381,8 @@ git commit -m "feat: align suggestion review UI with v05"
 ```ts
 it('keeps only v05 relations as formal edges and derives author overlays', () => {
   const dataset = toGraphDatasetView('concept', [conceptGraphResponse], pools)
-  expect(dataset.edges.map((edge) => edge.relationType)).toEqual(expect.arrayContaining(['studies', 'authored']))
+  expect(dataset.formalEdges.map((edge) => edge.relationType)).toEqual(expect.arrayContaining(['studies', 'authored']))
+  expect(dataset.edges.every((edge) => edge.relationType === 'relatedTo' || edge.relationType === 'broaderThan')).toBe(true)
   expect(dataset.contextOverlay.edges).toEqual(expect.arrayContaining([
     expect.objectContaining({ relationType: 'conceptAuthor', sourceId: 'concept-1', targetId: 'author-1' }),
   ]))
