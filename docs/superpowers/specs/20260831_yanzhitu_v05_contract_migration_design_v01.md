@@ -2,7 +2,7 @@
 
 日期：2026-08-31
 
-状态：待用户确认
+状态：用户已确认（2026-08-31）
 
 适用仓库：`D:\Codex\20260831_yanzhitu_frontend_backend_handoff_v01`
 
