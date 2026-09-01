@@ -1,21 +1,21 @@
-import type { Suggestion, SuggestionAction } from './suggestion.types'
+import type { Suggestion, SuggestionOperation } from './suggestion.types'
 
-export const suggestionActions: SuggestionAction[] = [
-  'addConcept',
-  'addMethod',
+export const suggestionOperations: SuggestionOperation[] = [
+  'resolveConceptMatch',
+  'resolveMethodMatch',
   'addFinding',
   'addRelation',
 ]
 
-const actionLabels: Record<SuggestionAction, string> = {
-  addConcept: '概念新增',
-  addMethod: '方法新增',
+const operationLabels: Record<SuggestionOperation, string> = {
+  resolveConceptMatch: '概念匹配',
+  resolveMethodMatch: '方法匹配',
   addFinding: '发现新增',
   addRelation: '关系新增',
 }
 
 export interface SuggestionCategoryGroup {
-  action: SuggestionAction
+  operation: SuggestionOperation
   label: string
   items: Suggestion[]
 }
@@ -27,7 +27,7 @@ export interface SuggestionPaperGroup {
   categories: SuggestionCategoryGroup[]
 }
 
-/** 将后端扁平建议按论文和固定的四种知识类型整理，且不修改输入数据。 */
+/** 将建议按论文和 v05 operation 分组，不依赖已删除的 action。 */
 export function groupSuggestionsByPaper(
   suggestions: Suggestion[],
   papers: Array<{ id: string; title: string }>,
@@ -45,10 +45,10 @@ export function groupSuggestionsByPaper(
     paperId,
     paperTitle: titleByPaperId.get(paperId) ?? `未知论文（${paperId}）`,
     total: items.length,
-    categories: suggestionActions.map((action) => ({
-      action,
-      label: actionLabels[action],
-      items: items.filter((item) => item.action === action),
+    categories: suggestionOperations.map((operation) => ({
+      operation,
+      label: operationLabels[operation],
+      items: items.filter((item) => item.operation === operation),
     })),
   }))
 }

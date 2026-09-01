@@ -1,33 +1,29 @@
 import type { SuggestionCategoryGroup } from './suggestion-grouping'
-import type { ResolutionSelection, ReviewedSuggestionStatus, Suggestion } from './suggestion.types'
+import type { Suggestion } from './suggestion.types'
 import SuggestionReviewCard from './SuggestionReviewCard'
 
 type SuggestionTypeSectionProps = {
   category: SuggestionCategoryGroup
   busyId?: string | null
-  onReviewOne?: (
+  onAccept?: (
     suggestion: Suggestion,
-    status: ReviewedSuggestionStatus,
-    reviewComment: string | null,
-    selections?: ResolutionSelection[],
+    selectedIds: string[],
+    labelOverrides: Record<string, string>,
   ) => Promise<void>
+  onReject?: (suggestion: Suggestion, reason: string | null) => Promise<void>
 }
 
-/** 显示论文内的一种知识信息类型，并为空类型保留明确占位。 */
+/** 显示论文内的一种 v05 operation，并为空类别保留明确占位。 */
 export default function SuggestionTypeSection({
   category,
   busyId = null,
-  onReviewOne,
+  onAccept,
+  onReject,
 }: SuggestionTypeSectionProps) {
   return (
-    <section
-      className="suggestion-type-section"
-      aria-label={`${category.label}模块`}
-    >
+    <section className="suggestion-type-section" aria-label={`${category.label}模块`}>
       <header className="suggestion-type-section__header">
-        <h3>
-          {category.label} <span>{category.items.length}</span>
-        </h3>
+        <h3>{category.label} <span>{category.items.length}</span></h3>
       </header>
       {category.items.length === 0 ? (
         <p className="suggestion-type-section__empty">暂无建议</p>
@@ -37,7 +33,8 @@ export default function SuggestionTypeSection({
             <SuggestionReviewCard
               busy={busyId === suggestion.id}
               key={suggestion.id}
-              onReview={onReviewOne}
+              onAccept={onAccept}
+              onReject={onReject}
               suggestion={suggestion}
             />
           ))}

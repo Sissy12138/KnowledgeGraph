@@ -1,13 +1,10 @@
 import { useState } from 'react'
 import type { ReviewedSuggestionStatus } from './suggestion.types'
-import type { ResolutionSelection } from './suggestion.types'
 
 export interface PendingBatchReview {
   ids: string[]
   scopeLabel: string
   decision: ReviewedSuggestionStatus
-  skippedCount: number
-  selectionsById: Record<string, ResolutionSelection[]>
 }
 
 type BatchReviewDialogProps = {
@@ -42,9 +39,6 @@ export default function BatchReviewDialog({
           将{decisionLabel} {request.ids.length} 条建议
         </p>
         <p className="batch-review-dialog__scope">范围：{request.scopeLabel}</p>
-        {request.skippedCount > 0 && (
-          <p className="batch-review-dialog__skipped">跳过 {request.skippedCount} 条（未达到默认置信度阈值）</p>
-        )}
         {isReject && (
           <label>
             <span>统一拒绝原因</span>
@@ -63,8 +57,8 @@ export default function BatchReviewDialog({
           </button>
           <button
             className={`review-button ${isReject ? 'review-button--reject' : 'review-button--accept'}`}
-            disabled={submitting || (isReject && reviewComment.trim().length === 0)}
-            onClick={() => onConfirm(isReject ? reviewComment.trim() : null)}
+            disabled={submitting || reviewComment.trim().length > 1000}
+            onClick={() => onConfirm(isReject ? reviewComment.trim() || null : null)}
             type="button"
           >
             {submitting ? '处理中…' : `确认${decisionLabel}`}

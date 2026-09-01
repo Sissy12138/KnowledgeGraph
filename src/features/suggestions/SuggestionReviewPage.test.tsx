@@ -1,451 +1,167 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
-import AppShell from '../../components/AppShell'
-import { DisplayPreferencesProvider } from '../../styles/display-preferences'
-import { paperListMock } from '../papers/paper.mock'
-import {
-  createMockSuggestionService,
-  SuggestionApiError,
-  type SuggestionService,
-} from './suggestion.service'
-import { suggestionMocks } from './suggestion.mock'
+import { describe, expect, it, vi } from 'vitest'
+import { ApiClientError } from '../../contracts/api-client'
+import type { SuggestionPage as SuggestionPageDto } from '../../contracts/v05.types'
+import { extractionDtoMocks, suggestionPageDtoMock } from './suggestion.mock'
+import { createMockSuggestionService, type SuggestionService } from './suggestion.service'
 import SuggestionReviewPage from './SuggestionReviewPage'
 
-const loadPapers = async () => paperListMock
-
-function renderPage(service: SuggestionService = createMockSuggestionService()) {
-  return render(
-    <SuggestionReviewPage
-      service={service}
-      loadPapers={loadPapers}
-    />,
-  )
+function pageWithItems(ids: string[], counts = { pending: 2, accepted: 0, rejected: 0, superseded: 1 }): SuggestionPageDto {
+  const items = suggestionPageDtoMock.items.filter((item) => ids.includes(item.id))
+  const evidenceIds = new Set(items.flatMap((item) => item.evidenceIds))
+  const paperIds = new Set(items.map((item) => item.paperId))
+  return {
+    ...structuredClone(suggestionPageDtoMock),
+    items,
+    total: items.length,
+    evidence: suggestionPageDtoMock.evidence.filter((item) => evidenceIds.has(item.id)),
+    papers: suggestionPageDtoMock.papers.filter((item) => paperIds.has(item.id)),
+    statusCounts: counts,
+  }
 }
 
-describe('SuggestionReviewPage workspace structure', () => {
-  it('主题切换后仍保留待审核标签与确认操作的可访问语义', async () => {
+function renderPage(service: SuggestionService) {
+  return render(<SuggestionReviewPage service={service} />)
+}
+
+async function expandPaper(user: ReturnType<typeof userEvent.setup>, title: string) {
+  const paper = await screen.findByRole('article', { name: `论文：${title}` })
+  await user.click(within(paper).getByRole('button', { name: `展开论文：${title}` }))
+  return paper
+}
+
+describe('SuggestionReviewPage v05 behavior', () => {
+  it('shows backend counts and skips batch accept items without defaults', async () => {
     const user = userEvent.setup()
-
-    render(
-      <DisplayPreferencesProvider
-        initialPreferences={{ themeId: 'softResearch', fontScalePercent: 100 }}
-      >
-        <MemoryRouter initialEntries={['/review']}>
-          <AppShell>
-            <SuggestionReviewPage
-              loadPapers={loadPapers}
-              service={createMockSuggestionService()}
-            />
-          </AppShell>
-        </MemoryRouter>
-      </DisplayPreferencesProvider>,
-    )
-
-    const pendingTab = await screen.findByRole('tab', { name: '待审核 4' })
-    expect(document.documentElement.style.getPropertyValue('--color-primary')).toBe(
-      '#5B68D6',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '界面主题' }),
-      'coolMinimal',
-    )
-
-    expect(document.documentElement.style.getPropertyValue('--color-primary')).toBe(
-      '#5277A8',
-    )
-    expect(pendingTab).toHaveAttribute('aria-selected', 'true')
-    const firstPaper = screen.getByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
+    const page = pageWithItems(['suggestion-005', 'suggestion-006'], {
+      pending: 9, accepted: 4, rejected: 3, superseded: 2,
     })
-    await user.click(
-      within(firstPaper).getByRole('button', {
-        name: '展开论文：反转学习中的认知灵活性与前额叶活动',
-      }),
-    )
-    const firstSuggestion = within(firstPaper).getByRole('article', {
-      name: '建议：新增概念：反转学习',
-    })
-    expect(within(firstSuggestion).getByRole('button', { name: '确认' })).toBeEnabled()
+    const method = page.items.find((item) => item.id === 'suggestion-006')
+    if (!method || method.proposedChange.type !== 'resolveMethodMatch') throw new Error('fixture missing')
+    method.proposedChange.defaultCandidateId = null
+    renderPage(createMockSuggestionService(page, extractionDtoMocks))
+
+    expect(await screen.findByRole('tab', { name: '待审核 9' })).toBeVisible()
+    expect(screen.getByRole('tab', { name: '已采纳 4' })).toBeVisible()
+    expect(screen.queryByRole('tab', { name: /superseded/i })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: '批量采纳整篇论文' }))
+    await user.click(screen.getByRole('button', { name: '确认采纳' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('1 条成功，1 条需要人工选择，0 条失败')
   })
 
-  it('defaults to pending and groups each paper into four ordered categories', async () => {
+  it('preserves the New selection and edited label after a stale candidate conflict', async () => {
     const user = userEvent.setup()
-    renderPage()
+    const base = createMockSuggestionService(pageWithItems(['suggestion-001'], {
+      pending: 1, accepted: 0, rejected: 0, superseded: 0,
+    }), extractionDtoMocks)
+    const acceptSuggestion = vi.fn().mockRejectedValue(new ApiClientError(409, {
+      code: 'RESOLUTION_CANDIDATE_STALE',
+      message: '候选已经变化',
+      retryable: false,
+      details: { nodeId: 'concept-replacement' },
+      requestId: 'request-stale',
+    }))
+    const service: SuggestionService = { ...base, acceptSuggestion }
+    renderPage(service)
+    const paper = await expandPaper(user, '反转学习中的认知灵活性与前额叶活动')
+    const card = within(paper).getByRole('article', { name: '建议：新增概念：反转学习' })
 
-    expect(
-      await screen.findByRole('heading', { name: '建议审核' }),
-    ).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: '待审核 4' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    )
-    expect(screen.getByRole('tab', { name: '已采纳 1' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: '拒绝意见 1' })).toBeInTheDocument()
-
-    const firstPaper = screen.getByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    await user.click(
-      within(firstPaper).getByRole('button', {
-        name: '展开论文：反转学习中的认知灵活性与前额叶活动',
-      }),
-    )
-
-    expect(
-      within(firstPaper).getAllByRole('heading', { level: 3 }).map((heading) =>
-        heading.textContent?.replace(/\s+\d+$/, ''),
-      ),
-    ).toEqual(['概念新增', '方法新增', '发现新增', '关系新增'])
-    expect(within(firstPaper).getAllByText('暂无建议')).toHaveLength(2)
-    const batchAccept = within(firstPaper).getByRole('button', {
-      name: '批量采纳整篇论文',
-    })
-    const batchReject = within(firstPaper).getByRole('button', {
-      name: '批量拒绝整篇论文',
-    })
-    expect(batchAccept).toHaveTextContent('√')
-    expect(batchAccept).toHaveAttribute('title', '批量采纳整篇论文')
-    expect(batchReject).toHaveTextContent('×')
-    expect(batchReject).toHaveAttribute('title', '批量拒绝整篇论文')
-    expect(
-      within(firstPaper).queryByRole('button', { name: '批量采纳概念新增' }),
-    ).toBeNull()
-    expect(
-      within(firstPaper).queryByRole('button', { name: '批量拒绝方法新增' }),
-    ).toBeNull()
-  })
-
-  it('allows more than one paper to stay expanded', async () => {
-    const user = userEvent.setup()
-    renderPage()
-    const firstPaper = await screen.findByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    const secondPaper = screen.getByRole('article', {
-      name: '论文：适应性决策的脑电标记',
-    })
-
-    await user.click(within(firstPaper).getByRole('button', { name: /展开论文/ }))
-    await user.click(within(secondPaper).getByRole('button', { name: /展开论文/ }))
-
-    expect(within(firstPaper).getByText('原文识别结果：反转学习')).toBeVisible()
-    expect(within(secondPaper).getByText('新增发现：学习成绩提升')).toBeVisible()
-    expect(
-      within(firstPaper).getByRole('button', { name: /收起论文/ }),
-    ).toHaveAttribute('aria-expanded', 'true')
-    expect(
-      within(secondPaper).getByRole('button', { name: /收起论文/ }),
-    ).toHaveAttribute('aria-expanded', 'true')
-  })
-
-  it('shows accepted and rejected history as read-only grouped pages', async () => {
-    const user = userEvent.setup()
-    renderPage()
-    await screen.findByRole('tab', { name: '已采纳 1' })
-
-    await user.click(screen.getByRole('tab', { name: '已采纳 1' }))
-    const acceptedPaper = screen.getByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    await user.click(within(acceptedPaper).getByRole('button', { name: /展开论文/ }))
-    expect(
-      within(acceptedPaper).getByText('新增发现：规则切换后反应变慢'),
-    ).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '采纳建议' })).toBeNull()
-
-    await user.click(screen.getByRole('tab', { name: '拒绝意见 1' }))
-    const rejectedPaper = screen.getByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    expect(
-      within(rejectedPaper).getByText('证据不足，相关结果未通过多重比较校正'),
-    ).toBeInTheDocument()
-    expect(within(rejectedPaper).getByText(/审核时间/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '拒绝建议' })).toBeNull()
-  })
-})
-
-describe('SuggestionReviewPage single review', () => {
-  it('shows compact entity candidates and defaults to the highest confidence option', async () => {
-    const user = userEvent.setup()
-    renderPage()
-    const paper = await screen.findByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    await user.click(within(paper).getByRole('button', { name: /展开论文/ }))
-    const card = within(paper).getByRole('article', {
-      name: '建议：新增概念：反转学习',
-    })
-
-    expect(within(card).getByText('原文识别结果：反转学习')).toBeInTheDocument()
-    expect(
-      within(card).getByRole('button', { name: '翻转课堂 86%' }),
-    ).toHaveAttribute('aria-pressed', 'true')
-    expect(
-      within(card).getByRole('button', { name: '混合学习 63%' }),
-    ).toHaveAttribute('aria-pressed', 'false')
-    expect(within(card).getByRole('button', { name: '确认' })).toBeEnabled()
-    expect(within(card).getByRole('button', { name: '拒绝' })).toBeEnabled()
-  })
-
-  it('submits one to three selected candidates and refuses a fourth option', async () => {
-    const user = userEvent.setup()
-    renderPage()
-    const paper = await screen.findByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    await user.click(within(paper).getByRole('button', { name: /展开论文/ }))
-    const card = within(paper).getByRole('article', {
-      name: '建议：新增概念：反转学习',
-    })
-
-    await user.click(within(card).getByRole('button', { name: '混合学习 63%' }))
-    await user.click(within(card).getByRole('button', { name: '反转学习 72%' }))
-    await user.click(within(card).getByRole('button', { name: '课堂教学 41%' }))
-
-    expect(within(card).getByRole('button', { name: '课堂教学 41%' })).toHaveAttribute('aria-pressed', 'false')
+    await user.click(within(card).getByRole('button', { name: /翻转课堂.*推荐分数 86%/ }))
+    await user.click(within(card).getByRole('button', { name: /反转学习.*推荐分数 72%/ }))
+    const input = within(card).getByRole('textbox', { name: '新节点规范名称：反转学习' })
+    await user.clear(input)
+    await user.type(input, '修订名称')
     await user.click(within(card).getByRole('button', { name: '确认' }))
 
-    await user.click(screen.getByRole('tab', { name: '已采纳 2' }))
-    expect(screen.getByText('翻转课堂 · 连接已有')).toBeInTheDocument()
-    expect(screen.getByText('混合学习 · 连接已有')).toBeInTheDocument()
-    expect(screen.getByText('反转学习 · 创建新节点')).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('候选已变化')
+    expect(screen.getByDisplayValue('修订名称')).toBeVisible()
+    expect(acceptSuggestion).toHaveBeenCalledWith('suggestion-001', {
+      selectedIds: ['concept-new-inverted-learning'],
+      labelOverrides: { 'concept-new-inverted-learning': '修订名称' },
+      comment: null,
+    })
   })
 
-  it('opens a rejection dialog from the red action and keeps an optional reason', async () => {
+  it('allows an empty rejection reason', async () => {
     const user = userEvent.setup()
-    renderPage()
-    const paper = await screen.findByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    await user.click(within(paper).getByRole('button', { name: /展开论文/ }))
-    const card = within(paper).getByRole('article', {
-      name: '建议：新增概念：反转学习',
-    })
+    renderPage(createMockSuggestionService(pageWithItems(['suggestion-001'], {
+      pending: 1, accepted: 0, rejected: 0, superseded: 0,
+    }), extractionDtoMocks))
+    const paper = await expandPaper(user, '反转学习中的认知灵活性与前额叶活动')
+    const card = within(paper).getByRole('article', { name: '建议：新增概念：反转学习' })
 
     await user.click(within(card).getByRole('button', { name: '拒绝' }))
     const dialog = screen.getByRole('dialog', { name: '拒绝此条识别结果' })
-    await user.type(
-      within(dialog).getByRole('textbox', { name: '拒绝原因（选填）' }),
-      '候选均不准确',
-    )
+    expect(within(dialog).getByRole('button', { name: '确认拒绝' })).toBeEnabled()
     await user.click(within(dialog).getByRole('button', { name: '确认拒绝' }))
 
-    await user.click(screen.getByRole('tab', { name: '拒绝意见 2' }))
-    expect(screen.getByText('候选均不准确')).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('审核成功')
   })
 
-  it('redirects a renamed new candidate to an existing node instead of creating a duplicate', async () => {
+  it('displays a missing recommendation score without treating it as accuracy', async () => {
     const user = userEvent.setup()
-    renderPage()
-    const paper = await screen.findByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    await user.click(within(paper).getByRole('button', { name: /展开论文/ }))
-    const card = within(paper).getByRole('article', {
-      name: '建议：新增概念：反转学习',
-    })
+    const extractions = structuredClone(extractionDtoMocks)
+    extractions['paper-001'].concepts[0].candidates[0].recommendationScore = null
+    renderPage(createMockSuggestionService(pageWithItems(['suggestion-001'], {
+      pending: 1, accepted: 0, rejected: 0, superseded: 0,
+    }), extractions))
 
-    await user.click(within(card).getByRole('button', { name: '翻转课堂 86%' }))
-    await user.click(within(card).getByRole('button', { name: '反转学习 72%' }))
-    const nameInput = within(card).getByRole('textbox', {
-      name: '新节点规范名称：反转学习',
-    })
-    await user.clear(nameInput)
-    await user.type(nameInput, '翻转课堂')
-
-    expect(within(card).getByRole('button', { name: '翻转课堂 86%' })).toHaveAttribute('aria-pressed', 'true')
-    expect(within(card).getByRole('button', { name: '反转学习 72%' })).toHaveAttribute('aria-pressed', 'false')
-    expect(within(card).getByRole('status')).toHaveTextContent('已改为连接已有节点：翻转课堂')
+    const paper = await expandPaper(user, '反转学习中的认知灵活性与前额叶活动')
+    expect(within(paper).getByRole('button', { name: /翻转课堂.*推荐分数未提供/ })).toBeVisible()
+    expect(within(paper).queryByText(/正确率/)).toBeNull()
   })
 
-  it('moves an accepted suggestion out of pending and into accepted', async () => {
+  it('renders accepted resolve history from executionResult without old candidates', async () => {
     const user = userEvent.setup()
-    renderPage()
-    const paper = await screen.findByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
+    const page = pageWithItems(['suggestion-001'], {
+      pending: 0, accepted: 1, rejected: 0, superseded: 0,
     })
-    await user.click(within(paper).getByRole('button', { name: /展开论文/ }))
-    const card = within(paper).getByRole('article', {
-      name: '建议：新增概念：反转学习',
-    })
+    page.items[0] = {
+      ...page.items[0],
+      status: 'accepted',
+      executionResult: {
+        type: 'resolveMatch',
+        resolvedTargets: [{ candidateId: 'historical-candidate', nodeId: 'concept-final', label: '最终概念', created: true, relationId: 'relation-final' }],
+      },
+      reviewedAt: '2026-08-29T10:00:00Z',
+    }
+    renderPage(createMockSuggestionService(page, extractionDtoMocks))
 
-    await user.click(within(card).getByRole('button', { name: '确认' }))
-
-    expect(
-      within(paper).queryByText('原文识别结果：反转学习'),
-    ).not.toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: '待审核 3' })).toBeInTheDocument()
-    await user.click(screen.getByRole('tab', { name: '已采纳 2' }))
-    expect(screen.getByText('原文识别结果：反转学习')).toBeInTheDocument()
+    await user.click(await screen.findByRole('tab', { name: '已采纳 1' }))
+    const paper = await expandPaper(user, '反转学习中的认知灵活性与前额叶活动')
+    expect(within(paper).getByText('最终概念 · 创建新节点')).toBeVisible()
+    expect(within(paper).queryByRole('button', { name: /翻转课堂/ })).toBeNull()
   })
 
-  it('moves a rejected suggestion and preserves its review comment', async () => {
+  it('keeps successful batch items applied when another item fails', async () => {
     const user = userEvent.setup()
-    renderPage()
-    const paper = await screen.findByRole('article', {
-      name: '论文：反转学习中的认知灵活性与前额叶活动',
-    })
-    await user.click(within(paper).getByRole('button', { name: /展开论文/ }))
-    const card = within(paper).getByRole('article', {
-      name: '建议：新增方法：行为任务',
-    })
-
-    await user.click(within(card).getByRole('button', { name: '拒绝' }))
-    const dialog = screen.getByRole('dialog', { name: '拒绝此条识别结果' })
-    await user.type(
-      within(dialog).getByRole('textbox', { name: '拒绝原因（选填）' }),
-      '样本信息不足',
-    )
-    await user.click(within(dialog).getByRole('button', { name: '确认拒绝' }))
-
-    await user.click(screen.getByRole('tab', { name: '拒绝意见 2' }))
-    expect(screen.getByText('原文识别结果：行为任务')).toBeInTheDocument()
-    expect(screen.getByText('样本信息不足')).toBeInTheDocument()
-    expect(screen.queryByText('行为任务 · 连接已有')).toBeNull()
-    expect(screen.getAllByText(/审核时间/).length).toBeGreaterThan(0)
-  })
-})
-
-describe('SuggestionReviewPage batch review', () => {
-  it('skips entity cards whose best candidate is below the default threshold', async () => {
-    const user = userEvent.setup()
-    const lowConfidenceSuggestions = suggestionMocks.map((suggestion) =>
-      suggestion.id === 'suggestion-006'
-        ? {
-            ...suggestion,
-            candidates: suggestion.candidates?.map((candidate) => ({
-              ...candidate,
-              confidence: 0.69,
-            })),
-          }
-        : suggestion,
-    )
-    renderPage(createMockSuggestionService(lowConfidenceSuggestions))
-    const paper = await screen.findByRole('article', {
-      name: '论文：适应性决策的脑电标记',
-    })
-
-    await user.click(
-      within(paper).getByRole('button', { name: '批量采纳整篇论文' }),
-    )
-
-    const dialog = screen.getByRole('dialog')
-    expect(dialog).toHaveTextContent('将采纳 1 条建议')
-    expect(dialog).toHaveTextContent('跳过 1 条')
-  })
-
-  it('rejects all pending suggestions in one paper with a shared comment', async () => {
-    const user = userEvent.setup()
-    renderPage()
-    const paper = await screen.findByRole('article', {
-      name: '论文：适应性决策的脑电标记',
-    })
-    await user.click(within(paper).getByRole('button', { name: /展开论文/ }))
-
-    await user.click(
-      within(paper).getByRole('button', { name: '批量拒绝整篇论文' }),
-    )
-    const dialog = screen.getByRole('dialog')
-    expect(dialog).toHaveTextContent('将拒绝 2 条建议')
-    expect(
-      within(dialog).getByRole('button', { name: '确认拒绝' }),
-    ).toBeDisabled()
-    await user.type(
-      within(dialog).getByRole('textbox', { name: '统一拒绝原因' }),
-      '需要补充统计检验',
-    )
-    await user.click(within(dialog).getByRole('button', { name: '确认拒绝' }))
-
-    expect(
-      screen.queryByRole('article', { name: '论文：适应性决策的脑电标记' }),
-    ).not.toBeInTheDocument()
-    await user.click(screen.getByRole('tab', { name: '拒绝意见 3' }))
-    const rejectedPaper = screen.getByRole('article', {
-      name: '论文：适应性决策的脑电标记',
-    })
-    expect(within(rejectedPaper).getAllByText('需要补充统计检验')).toHaveLength(2)
-  })
-
-  it('keeps failed items pending when a batch only partially succeeds', async () => {
-    const user = userEvent.setup()
-    const baseService = createMockSuggestionService()
-    const partialService: SuggestionService = {
-      ...baseService,
+    const page = pageWithItems(['suggestion-005', 'suggestion-006'])
+    const base = createMockSuggestionService(page, extractionDtoMocks)
+    const service: SuggestionService = {
+      ...base,
       async reviewSuggestions(input) {
-        const updated = await baseService.acceptSuggestion(input.ids[0])
+        const updated = await base.acceptSuggestion('suggestion-005')
         return {
           updated: [updated],
-          failures: [
-            {
-              id: input.ids[1],
-              error: new SuggestionApiError(
-                500,
-                'SUGGESTION_REVIEW_FAILED',
-                '临时审核失败',
-              ),
-            },
-          ],
+          skipped: [],
+          failures: [{
+            id: input.ids.find((id) => id !== 'suggestion-005') ?? 'suggestion-006',
+            error: new ApiClientError(500, {
+              code: 'SUGGESTION_REVIEW_FAILED', message: '临时失败', retryable: true, details: null, requestId: 'request-failed',
+            }),
+          }],
         }
       },
     }
-    renderPage(partialService)
-    const paper = await screen.findByRole('article', {
-      name: '论文：适应性决策的脑电标记',
-    })
+    renderPage(service)
 
-    await user.click(
-      within(paper).getByRole('button', { name: '批量采纳整篇论文' }),
-    )
+    await user.click(await screen.findByRole('button', { name: '批量采纳整篇论文' }))
     await user.click(screen.getByRole('button', { name: '确认采纳' }))
 
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      '成功 1 条，失败 1 条。失败项仍保留在待审核列表。',
-    )
-    expect(within(paper).getByText('1 条建议')).toBeInTheDocument()
-  })
-
-  it('reloads all states when another reviewer causes a 409 conflict', async () => {
-    const user = userEvent.setup()
-    const baseService = createMockSuggestionService()
-    const conflictService: SuggestionService = {
-      ...baseService,
-      async reviewSuggestions(input) {
-        const updated = await baseService.acceptSuggestion(input.ids[0])
-        await baseService.acceptSuggestion(input.ids[1])
-        return {
-          updated: [updated],
-          failures: [
-            {
-              id: input.ids[1],
-              error: new SuggestionApiError(
-                409,
-                'SUGGESTION_ALREADY_REVIEWED',
-                '该建议已经完成审核',
-              ),
-            },
-          ],
-        }
-      },
-    }
-    renderPage(conflictService)
-    const paper = await screen.findByRole('article', {
-      name: '论文：适应性决策的脑电标记',
-    })
-
-    await user.click(
-      within(paper).getByRole('button', { name: '批量采纳整篇论文' }),
-    )
-    await user.click(screen.getByRole('button', { name: '确认采纳' }))
-
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      '部分建议已被其他人审核，已刷新最新状态。',
-    )
-    expect(
-      screen.queryByRole('article', { name: '论文：适应性决策的脑电标记' }),
-    ).not.toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: '已采纳 3' })).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('1 条成功，0 条需要人工选择，1 条失败')
+    expect(screen.getByText('1 条建议')).toBeVisible()
   })
 })

@@ -1,43 +1,38 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getPapers } from '../papers/paper.service'
-import type { PaperPage, PaperSummary } from '../papers/paper.types'
+import { ApiClientError } from '../../contracts/api-client'
 import BatchReviewDialog, {
   type PendingBatchReview,
 } from './BatchReviewDialog'
 import PaperReviewGroup from './PaperReviewGroup'
 import ReviewStatusTabs from './ReviewStatusTabs'
 import { groupSuggestionsByPaper } from './suggestion-grouping'
-import { buildResolutionSelections, getDefaultCandidateIds } from './suggestion-resolution'
 import {
   suggestionService,
-  SuggestionApiError,
   type SuggestionService,
 } from './suggestion.service'
 import type {
   ReviewedSuggestionStatus,
-  ResolutionSelection,
   Suggestion,
-  SuggestionStatus,
+  SuggestionPage,
 } from './suggestion.types'
+import type { ReviewTabStatus } from './ReviewStatusTabs'
 import './SuggestionReviewPage.css'
 
 type SuggestionReviewPageProps = {
   service?: SuggestionService
-  loadPapers?: () => Promise<PaperPage>
 }
 
 type ViewState =
   | { status: 'loading' }
-  | { status: 'success'; items: Suggestion[]; papers: PaperSummary[] }
+  | { status: 'success'; page: SuggestionPage }
   | { status: 'error'; message: string }
 
 /** 编排审核状态、论文分组与信息类型模块。 */
 export default function SuggestionReviewPage({
   service = suggestionService,
-  loadPapers = getPapers,
 }: SuggestionReviewPageProps) {
   const [viewState, setViewState] = useState<ViewState>({ status: 'loading' })
-  const [activeStatus, setActiveStatus] = useState<SuggestionStatus>('pending')
+  const [activeStatus, setActiveStatus] = useState<ReviewTabStatus>('pending')
   const [expandedPaperIds, setExpandedPaperIds] = useState<Set<string>>(
     () => new Set(),
   )
@@ -49,10 +44,10 @@ export default function SuggestionReviewPage({
   useEffect(() => {
     let isActive = true
 
-    Promise.all([service.listAllSuggestions(), loadPapers()])
-      .then(([items, paperPage]) => {
+    service.listSuggestions(activeStatus)
+      .then((page) => {
         if (isActive) {
-          setViewState({ status: 'success', items, papers: paperPage.items })
+          setViewState({ status: 'success', page })
         }
       })
       .catch((error: unknown) => {
@@ -66,24 +61,19 @@ export default function SuggestionReviewPage({
     return () => {
       isActive = false
     }
-  }, [loadPapers, service])
+  }, [activeStatus, service])
 
-  const counts = useMemo<Record<SuggestionStatus, number>>(() => {
-    const items = viewState.status === 'success' ? viewState.items : []
-    return {
-      pending: items.filter((item) => item.status === 'pending').length,
-      accepted: items.filter((item) => item.status === 'accepted').length,
-      rejected: items.filter((item) => item.status === 'rejected').length,
-    }
-  }, [viewState])
+  const counts = viewState.status === 'success'
+    ? viewState.page.statusCounts
+    : { pending: 0, accepted: 0, rejected: 0, superseded: 0 }
 
   const groups = useMemo(() => {
     if (viewState.status !== 'success') return []
     return groupSuggestionsByPaper(
-      viewState.items.filter((item) => item.status === activeStatus),
-      viewState.papers,
+      viewState.page.items,
+      viewState.page.papers,
     )
-  }, [activeStatus, viewState])
+  }, [viewState])
 
   function togglePaper(paperId: string) {
     setExpandedPaperIds((current) => {
@@ -94,41 +84,64 @@ export default function SuggestionReviewPage({
     })
   }
 
-  async function reviewOne(
+  async function refreshPage() {
+    const page = await service.listSuggestions(activeStatus)
+    setViewState({ status: 'success', page })
+  }
+
+  function showReviewError(error: unknown) {
+    if (
+      error instanceof ApiClientError
+      && error.status === 409
+      && error.code === 'RESOLUTION_CANDIDATE_STALE'
+    ) {
+      const replacement = typeof error.details?.nodeId === 'string'
+        ? `；可重新选择节点 ${error.details.nodeId}`
+        : ''
+      setNotice(`候选已变化：${error.message}${replacement}`)
+      return
+    }
+    setNotice(
+      error instanceof ApiClientError && error.status === 409
+        ? '该建议状态已变化，请刷新后查看。'
+        : error instanceof Error
+          ? error.message
+          : '审核失败，请稍后重试。',
+    )
+  }
+
+  async function acceptOne(
     suggestion: Suggestion,
-    status: ReviewedSuggestionStatus,
-    reviewComment: string | null,
-    selections?: ResolutionSelection[],
+    selectedIds: string[],
+    labelOverrides: Record<string, string>,
   ) {
     setBusyId(suggestion.id)
     setNotice(null)
 
     try {
-      const updated =
-        status === 'accepted'
-          ? await service.acceptSuggestion(suggestion.id, {
-              reviewComment,
-              selections,
-            })
-          : await service.rejectSuggestion(suggestion.id, reviewComment)
-      setViewState((current) =>
-        current.status === 'success'
-          ? {
-              ...current,
-              items: current.items.map((item) =>
-                item.id === updated.id ? updated : item,
-              ),
-            }
-          : current,
-      )
+      await service.acceptSuggestion(suggestion.id, {
+        selectedIds,
+        labelOverrides,
+        comment: null,
+      })
+      await refreshPage()
+      setNotice('审核成功。')
     } catch (error) {
-      setNotice(
-        error instanceof SuggestionApiError && error.status === 409
-          ? '该建议已被其他人审核，请刷新后查看最新状态。'
-          : error instanceof Error
-            ? error.message
-            : '审核失败，请稍后重试。',
-      )
+      showReviewError(error)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function rejectOne(suggestion: Suggestion, reason: string | null) {
+    setBusyId(suggestion.id)
+    setNotice(null)
+    try {
+      await service.rejectSuggestion(suggestion.id, reason)
+      await refreshPage()
+      setNotice('审核成功。')
+    } catch (error) {
+      showReviewError(error)
     } finally {
       setBusyId(null)
     }
@@ -139,30 +152,10 @@ export default function SuggestionReviewPage({
     decision: ReviewedSuggestionStatus,
     scopeLabel: string,
   ) {
-    const requestedItems =
-      viewState.status === 'success'
-        ? viewState.items.filter((item) => ids.includes(item.id))
-        : []
-    const selectionsById: Record<string, ResolutionSelection[]> = {}
-    const eligibleIds = requestedItems.flatMap((item) => {
-      if (decision === 'rejected' || !item.candidates?.length) return [item.id]
-      const defaultIds = getDefaultCandidateIds(item.candidates)
-      if (defaultIds.length === 0) return []
-      selectionsById[item.id] = buildResolutionSelections(item, defaultIds)
-      return [item.id]
-    })
-
-    if (eligibleIds.length === 0) {
-      setNotice('当前范围没有达到 70% 默认置信度阈值的候选，请逐条人工审核。')
-      return
-    }
-
     setBatchRequest({
-      ids: eligibleIds,
+      ids,
       decision,
       scopeLabel,
-      skippedCount: ids.length - eligibleIds.length,
-      selectionsById,
     })
     setNotice(null)
   }
@@ -175,39 +168,10 @@ export default function SuggestionReviewPage({
       const result = await service.reviewSuggestions({
         ids: batchRequest.ids,
         status: batchRequest.decision,
-        reviewComment,
-        selectionsById: batchRequest.selectionsById,
+        comment: reviewComment,
       })
-      setViewState((current) =>
-        current.status === 'success'
-          ? {
-              ...current,
-              items: current.items.map(
-                (item) =>
-                  result.updated.find((updated) => updated.id === item.id) ?? item,
-              ),
-            }
-          : current,
-      )
-
-      const hasConflict = result.failures.some(
-        (failure) => failure.error.status === 409,
-      )
-      if (hasConflict) {
-        const refreshed = await service.listAllSuggestions()
-        setViewState((current) =>
-          current.status === 'success'
-            ? { ...current, items: refreshed }
-            : current,
-        )
-        setNotice('部分建议已被其他人审核，已刷新最新状态。')
-      } else if (result.failures.length > 0) {
-        setNotice(
-          `成功 ${result.updated.length} 条，失败 ${result.failures.length} 条。失败项仍保留在待审核列表。`,
-        )
-      } else {
-        setNotice(`已成功处理 ${result.updated.length} 条建议。`)
-      }
+      await refreshPage()
+      setNotice(`${result.updated.length} 条成功，${result.skipped.length} 条需要人工选择，${result.failures.length} 条失败。`)
       setBatchRequest(null)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '批量审核失败。')
@@ -273,7 +237,8 @@ export default function SuggestionReviewPage({
                   group={group}
                   key={group.paperId}
                   onToggle={() => togglePaper(group.paperId)}
-                  onReviewOne={activeStatus === 'pending' ? reviewOne : undefined}
+                  onAccept={activeStatus === 'pending' ? acceptOne : undefined}
+                  onReject={activeStatus === 'pending' ? rejectOne : undefined}
                   onReviewMany={
                     activeStatus === 'pending' ? requestBatchReview : undefined
                   }

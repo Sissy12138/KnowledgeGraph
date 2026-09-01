@@ -1,12 +1,14 @@
 import type { SuggestionStatus } from './suggestion.types'
 
+export type ReviewTabStatus = Extract<SuggestionStatus, 'pending' | 'accepted' | 'rejected'>
+
 type ReviewStatusTabsProps = {
-  value: SuggestionStatus
+  value: ReviewTabStatus
   counts: Record<SuggestionStatus, number>
-  onChange: (status: SuggestionStatus) => void
+  onChange: (status: ReviewTabStatus) => void
 }
 
-const tabs: Array<{ status: SuggestionStatus; label: string }> = [
+const tabs: Array<{ status: ReviewTabStatus; label: string }> = [
   { status: 'pending', label: '待审核' },
   { status: 'accepted', label: '已采纳' },
   { status: 'rejected', label: '拒绝意见' },

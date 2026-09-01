@@ -13,6 +13,7 @@ export default function RejectSuggestionDialog({
   onConfirm,
 }: RejectSuggestionDialogProps) {
   const [reason, setReason] = useState('')
+  const tooLong = reason.trim().length > 1000
 
   return (
     <div className="batch-review-dialog-backdrop">
@@ -33,12 +34,13 @@ export default function RejectSuggestionDialog({
             rows={3}
             value={reason}
           />
+          <small>{reason.trim().length}/1000</small>
         </label>
         <div className="batch-review-dialog__buttons">
           <button disabled={submitting} onClick={onCancel} type="button">取消</button>
           <button
             className="review-button review-button--reject"
-            disabled={submitting}
+            disabled={submitting || tooLong}
             onClick={() => onConfirm(reason.trim() || null)}
             type="button"
           >

@@ -1,29 +1,27 @@
 import type {
-  ResolutionCandidate,
-  ResolutionSelection,
-  Suggestion,
-} from './suggestion.types'
+  AcceptSuggestionRequest as AcceptSuggestionRequestDto,
+  RejectSuggestionRequest as RejectSuggestionRequestDto,
+} from '../../contracts/v05.types'
+import type { Suggestion } from './suggestion.types'
 
-export const DEFAULT_CANDIDATE_THRESHOLD = 0.7
 export const MAX_CANDIDATE_SELECTIONS = 3
 
-/** 返回达到阈值的最高置信度候选；用于单卡初始状态与批量审核。 */
-export function getDefaultCandidateIds(
-  candidates: ResolutionCandidate[],
-  threshold = DEFAULT_CANDIDATE_THRESHOLD,
-): string[] {
-  const highest = candidates.reduce<ResolutionCandidate | null>(
-    (current, candidate) =>
-      current === null || candidate.confidence > current.confidence
-        ? candidate
-        : current,
-    null,
-  )
-
-  return highest && highest.confidence >= threshold ? [highest.id] : []
+function isResolveSuggestion(suggestion: Suggestion): boolean {
+  return suggestion.operation === 'resolveConceptMatch'
+    || suggestion.operation === 'resolveMethodMatch'
 }
 
-/** 切换候选选择；到达上限时保持原选择不变。 */
+/** 仅使用后端明确返回的默认候选；推荐分数不构成前端阈值。 */
+export function getDefaultCandidateIds(suggestion: Suggestion): string[] {
+  const change = suggestion.proposedChange
+  const id = change.type === 'resolveConceptMatch'
+    || change.type === 'resolveMethodMatch'
+    ? change.defaultCandidateId
+    : null
+  return id ? [id] : []
+}
+
+/** 切换候选选择；到达 v05 上限时保持原选择不变。 */
 export function toggleCandidateSelection(
   selectedIds: string[],
   candidateId: string,
@@ -37,45 +35,49 @@ export function toggleCandidateSelection(
     : [...selectedIds, candidateId]
 }
 
-function normalizeName(name: string) {
-  return name.trim().toLocaleLowerCase('zh-CN')
-}
+/** 把界面选择转换为 v05 接受请求；Existing 永不携带名称覆盖。 */
+export function buildAcceptSuggestionRequest(
+  suggestion: Suggestion,
+  selectedIds: string[],
+  labelOverrides: Record<string, string>,
+  comment: string | null,
+): AcceptSuggestionRequestDto {
+  if (!isResolveSuggestion(suggestion)) {
+    return { comment: comment?.trim() || null, resolution: null }
+  }
 
-/** 检查新节点规范名称是否与当前已有候选重名。 */
-export function resolveNewCandidateName(
-  name: string,
-  candidates: ResolutionCandidate[],
-) {
-  const normalizedName = name.trim()
-  const normalizedKey = normalizeName(name)
-  const matchingExisting = candidates.find(
-    (candidate) =>
-      candidate.kind === 'existing' &&
-      normalizeName(candidate.name) === normalizedKey,
-  )
+  if (selectedIds.length < 1 || selectedIds.length > MAX_CANDIDATE_SELECTIONS) {
+    throw new Error('实体消歧必须选择一至三个候选')
+  }
+  if (new Set(selectedIds).size !== selectedIds.length) {
+    throw new Error('实体消歧候选不得重复')
+  }
+
+  const candidates = selectedIds.map((candidateId) => {
+    const candidate = suggestion.candidates.find((item) => item.id === candidateId)
+    if (!candidate) throw new Error('实体消歧包含无效候选')
+    return candidate
+  })
+  if (candidates.filter((candidate) => candidate.kind === 'new').length > 1) {
+    throw new Error('实体消歧最多只能选择一个 New 候选')
+  }
 
   return {
-    normalizedName,
-    matchingExistingCandidateId: matchingExisting?.id ?? null,
+    comment: comment?.trim() || null,
+    resolution: {
+      selectedTargets: candidates.map((candidate) => ({
+        candidateId: candidate.id,
+        labelOverride: candidate.kind === 'new'
+          ? labelOverrides[candidate.id]?.trim() || null
+          : null,
+      })),
+    },
   }
 }
 
-/** 把前端候选选择转换成可交给后端的明确建点/连边决定。 */
-export function buildResolutionSelections(
-  suggestion: Suggestion,
-  selectedIds: string[],
-  nameOverrides: Record<string, string> = {},
-): ResolutionSelection[] {
-  const candidates = suggestion.candidates ?? []
-  return selectedIds.flatMap((id) => {
-    const candidate = candidates.find((item) => item.id === id)
-    if (!candidate) return []
-    return [{
-      candidateId: candidate.id,
-      operation: candidate.kind === 'existing' ? 'linkExisting' : 'createNew',
-      targetEntityId: candidate.targetEntityId,
-      name: nameOverrides[id]?.trim() || candidate.name,
-      confidence: candidate.confidence,
-    }]
-  })
+/** 把可选拒绝原因转换为 v05 请求体。 */
+export function buildRejectSuggestionRequest(
+  reason: string | null,
+): RejectSuggestionRequestDto {
+  return { reason: reason?.trim() || null }
 }

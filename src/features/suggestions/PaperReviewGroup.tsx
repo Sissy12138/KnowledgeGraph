@@ -1,18 +1,18 @@
 import type { SuggestionPaperGroup } from './suggestion-grouping'
 import SuggestionTypeSection from './SuggestionTypeSection'
-import type { ResolutionSelection, ReviewedSuggestionStatus, Suggestion } from './suggestion.types'
+import type { ReviewedSuggestionStatus, Suggestion } from './suggestion.types'
 
 type PaperReviewGroupProps = {
   group: SuggestionPaperGroup
   expanded: boolean
   onToggle: () => void
   busyId?: string | null
-  onReviewOne?: (
+  onAccept?: (
     suggestion: Suggestion,
-    status: ReviewedSuggestionStatus,
-    reviewComment: string | null,
-    selections?: ResolutionSelection[],
+    selectedIds: string[],
+    labelOverrides: Record<string, string>,
   ) => Promise<void>
+  onReject?: (suggestion: Suggestion, reason: string | null) => Promise<void>
   batchBusy?: boolean
   onReviewMany?: (
     ids: string[],
@@ -27,7 +27,8 @@ export default function PaperReviewGroup({
   expanded,
   onToggle,
   busyId = null,
-  onReviewOne,
+  onAccept,
+  onReject,
   batchBusy = false,
   onReviewMany,
 }: PaperReviewGroupProps) {
@@ -99,8 +100,9 @@ export default function PaperReviewGroup({
             <SuggestionTypeSection
               busyId={busyId}
               category={category}
-              key={category.action}
-              onReviewOne={onReviewOne}
+              key={category.operation}
+              onAccept={onAccept}
+              onReject={onReject}
             />
           ))}
         </div>

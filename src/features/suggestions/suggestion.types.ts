@@ -1,65 +1,47 @@
-export type SuggestionStatus = 'pending' | 'accepted' | 'rejected'
+import type {
+  Evidence,
+  ProposedChange,
+  ResolutionCandidate,
+  Suggestion as SuggestionDto,
+  SuggestionExecutionResult,
+  SuggestionOperation,
+  SuggestionPage as SuggestionPageDto,
+  SuggestionPaperSummary,
+  SuggestionStatus,
+  SuggestionStatusCounts,
+} from '../../contracts/v05.types'
 
-export type ReviewedSuggestionStatus = Exclude<SuggestionStatus, 'pending'>
-
-export type SuggestionAction =
-  | 'addConcept'
-  | 'addMethod'
-  | 'addFinding'
-  | 'addRelation'
-
-export interface SuggestionEvidence {
-  id: string
-  paperId: string
-  section: string | null
-  text: string
+export type {
+  Evidence as SuggestionEvidence,
+  ResolutionCandidate,
+  SuggestionExecutionResult,
+  SuggestionOperation,
+  SuggestionPaperSummary,
+  SuggestionStatus,
+  SuggestionStatusCounts,
 }
 
-export type ResolutionEntityType = 'concept' | 'method'
+export type ReviewedSuggestionStatus = Extract<SuggestionStatus, 'accepted' | 'rejected'>
 
-export type ResolutionCandidateKind = 'existing' | 'new'
+export type SuggestionCandidateState =
+  | 'current'
+  | 'staleExtraction'
+  | 'history'
+  | 'notApplicable'
 
-export interface ResolutionCandidate {
-  id: string
-  kind: ResolutionCandidateKind
-  entityType: ResolutionEntityType
-  targetEntityId: string | null
-  name: string
-  originalName: string
-  confidence: number
+/** v05 Suggestion DTO 加上当前页论文、Evidence 与最新 Extraction 候选连接结果。 */
+export type Suggestion = Omit<SuggestionDto, 'evidenceIds' | 'proposedChange' | 'executionResult'> & {
+  paperTitle: string
+  evidence: Evidence[]
+  candidates: ResolutionCandidate[]
+  candidateState: SuggestionCandidateState
+  canReview: boolean
+  proposedChange: ProposedChange
+  executionResult: SuggestionExecutionResult | null
 }
 
-export interface ResolutionSelection {
-  candidateId: string
-  operation: 'linkExisting' | 'createNew'
-  targetEntityId: string | null
-  name: string
-  confidence: number
-}
-
-export interface Suggestion {
-  id: string
-  paperId: string
-  extractionId: string
-  action: SuggestionAction
-  status: SuggestionStatus
-  title: string
-  reason: string
-  confidence: number | null
-  evidence: SuggestionEvidence[]
-  candidates?: ResolutionCandidate[]
-  resolvedSelections?: ResolutionSelection[]
-  proposedChange: Record<string, unknown>
-  reviewedAt: string | null
-  reviewComment: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export interface SuggestionPage {
+/** 页面稳定使用的分页 ViewModel；保留 v05 的池与状态计数。 */
+export type SuggestionPage = Omit<SuggestionPageDto, 'items'> & {
   items: Suggestion[]
-  page: number
-  pageSize: number
-  total: number
   totalPages: number
 }
