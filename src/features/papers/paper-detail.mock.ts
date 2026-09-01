@@ -1,21 +1,29 @@
-import type { PaperDetail } from './paper.types'
+import type {
+  AuthorDetail as AuthorDetailDto,
+  PaperDetail as PaperDetailDto,
+} from '../../contracts/v05.types'
 
 /** 模拟 GET /api/v1/papers/{paperId} 返回的论文详情。 */
-export const paperDetailMocks: PaperDetail[] = [
+export const paperDetailMocks: PaperDetailDto[] = [
   {
     id: 'paper-001',
     title: '反转学习中的认知灵活性与前额叶活动',
     authors: [
-      {
-        id: 'author-li-ming',
-        name: '李明',
-        affiliation: '示例大学脑科学中心',
-        orcid: null,
-      },
-      { id: 'author-wang-fang', name: '王芳', affiliation: null, orcid: null },
+      { authorId: 'author-wang-fang', displayName: '王芳', rawName: 'Wang Fang', authorOrder: 2 },
+      { authorId: 'author-li-ming', displayName: '李明', rawName: 'Li Ming', authorOrder: 1 },
     ],
     year: 2025,
     doi: '10.1000/yzt.2025.001',
+    journal: {
+      name: 'Nature Neuroscience',
+      issn: '1097-6256',
+      metrics: {
+        impactFactor: 25,
+        jcrDataYear: 2024,
+        categories: [{ category: 'Neurosciences', quartile: 'Q1' }],
+        metricSource: 'JCR',
+      },
+    },
     abstract: '本研究考察反转学习中的行为调整及其神经电生理指标。',
     source: { type: 'manual', externalId: null, url: null },
     status: 'pendingReview',
@@ -36,12 +44,22 @@ export const paperDetailMocks: PaperDetail[] = [
     id: 'paper-002',
     title: '价值更新中的网络动力学',
     authors: [
-      { id: 'author-li-ming', name: '李明', affiliation: null, orcid: null },
-      { id: 'author-wang-fang', name: '王芳', affiliation: null, orcid: null },
-      { id: 'author-chen-wei', name: '陈伟', affiliation: null, orcid: null },
+      { authorId: 'author-chen-wei', displayName: '陈伟', rawName: 'Chen Wei', authorOrder: 3 },
+      { authorId: 'author-li-ming', displayName: '李明', rawName: 'Li Ming', authorOrder: 1 },
+      { authorId: 'author-wang-fang', displayName: '王芳', rawName: 'Wang Fang', authorOrder: 2 },
     ],
     year: 2024,
     doi: null,
+    journal: {
+      name: 'Neuron',
+      issn: '0896-6273',
+      metrics: {
+        impactFactor: 16.2,
+        jcrDataYear: 2024,
+        categories: [{ category: 'Neurosciences', quartile: 'Q1' }],
+        metricSource: 'JCR',
+      },
+    },
     abstract: '本研究分析预测误差信号与后续选择更新之间的关系。',
     source: { type: 'academicSearch', externalId: 'search-002', url: null },
     status: 'completed',
@@ -62,11 +80,21 @@ export const paperDetailMocks: PaperDetail[] = [
     id: 'paper-003',
     title: '适应性决策的脑电标记',
     authors: [
-      { id: 'author-chen-wei', name: '陈伟', affiliation: null, orcid: null },
-      { id: 'author-zhao-jing', name: '赵静', affiliation: null, orcid: null },
+      { authorId: 'author-zhao-jing', displayName: '赵静', rawName: 'Zhao Jing', authorOrder: 2 },
+      { authorId: 'author-chen-wei', displayName: '陈伟', rawName: 'Chen Wei', authorOrder: 1 },
     ],
     year: 2023,
     doi: null,
+    journal: {
+      name: 'Cerebral Cortex',
+      issn: '1047-3211',
+      metrics: {
+        impactFactor: 4.2,
+        jcrDataYear: 2024,
+        categories: [{ category: 'Neurosciences', quartile: 'Q2' }],
+        metricSource: 'JCR',
+      },
+    },
     abstract: '本论文正在解析中，研究概览尚未生成。',
     source: { type: 'zotero', externalId: 'zotero-003', url: null },
     status: 'processing',
@@ -81,11 +109,12 @@ export const paperDetailMocks: PaperDetail[] = [
     id: 'paper-004',
     title: '人类层级强化学习',
     authors: [
-      { id: 'author-zhou-ning', name: '周宁', affiliation: null, orcid: null },
-      { id: 'author-sun-yue', name: '孙悦', affiliation: null, orcid: null },
+      { authorId: 'author-zhou-ning', displayName: '周宁', rawName: 'Zhou Ning', authorOrder: 1 },
+      { authorId: 'author-sun-yue', displayName: '孙悦', rawName: 'Sun Yue', authorOrder: 2 },
     ],
     year: 2022,
     doi: null,
+    journal: null,
     abstract: null,
     source: { type: 'manual', externalId: null, url: null },
     status: 'failed',
@@ -100,10 +129,11 @@ export const paperDetailMocks: PaperDetail[] = [
     id: 'paper-005',
     title: '可重复的任务切换数据集',
     authors: [
-      { id: 'author-wu-lan', name: '吴兰', affiliation: '开放科学研究中心', orcid: null },
+      { authorId: 'author-wu-lan', displayName: '吴兰', rawName: 'Wu Lan', authorOrder: 1 },
     ],
     year: 2021,
     doi: null,
+    journal: { name: 'Open Science Journal', issn: null, metrics: null },
     abstract: '本研究发布可重复使用的任务切换行为与网络分析数据。',
     source: { type: 'manual', externalId: null, url: null },
     status: 'completed',
@@ -119,5 +149,45 @@ export const paperDetailMocks: PaperDetail[] = [
     },
     createdAt: '2026-08-18T06:00:00Z',
     updatedAt: '2026-08-24T10:05:00Z',
+  },
+]
+
+/** v05 作者详情 DTO Mock；导入的 ORCID 保留来源且不标记为 OAuth 认证。 */
+export const authorDetailMocks: AuthorDetailDto[] = [
+  {
+    id: 'author-li-ming',
+    displayName: '李明',
+    nameVariants: ['Li Ming'],
+    externalIds: {
+      orcid: '0000-0002-1825-0097',
+      orcidSource: 'crossref',
+      orcidAuthenticated: false,
+    },
+    affiliations: [{
+      rawText: '示例大学脑科学中心',
+      displayName: '示例大学脑科学中心',
+      rorId: null,
+    }],
+    identityStatus: 'resolved',
+    mergedIntoAuthorId: null,
+    paperCount: 2,
+    createdAt: '2026-08-20T08:00:00Z',
+    updatedAt: '2026-08-26T09:10:00Z',
+  },
+  {
+    id: 'author-wang-fang',
+    displayName: '王芳',
+    nameVariants: ['Wang Fang'],
+    externalIds: {
+      orcid: '0000-0001-5109-3700',
+      orcidSource: 'orcidOAuth',
+      orcidAuthenticated: true,
+    },
+    affiliations: [],
+    identityStatus: 'resolved',
+    mergedIntoAuthorId: null,
+    paperCount: 2,
+    createdAt: '2026-08-20T08:00:00Z',
+    updatedAt: '2026-08-26T09:10:00Z',
   },
 ]

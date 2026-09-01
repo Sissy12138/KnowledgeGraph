@@ -78,6 +78,9 @@ export default function PaperDetailPage({
 
   const { paper } = viewState
   const overview = paper.researchOverview
+  const showDemoMetrics =
+    paper.metricSource === 'mock'
+    && paper.journal?.impactFactor != null
 
   return (
     <article className="paper-detail-page">
@@ -96,6 +99,16 @@ export default function PaperDetailPage({
         <div className="paper-detail-page__meta">
           <span>{paper.year ?? '年份未知'}</span>
           <span>{paper.doi ? `DOI ${paper.doi}` : '暂无 DOI'}</span>
+          {paper.journal && <span>{paper.journal.name}</span>}
+          {showDemoMetrics && paper.journal && (
+            <>
+              <span>
+                JIF {paper.journal.impactFactor}
+                （{paper.journal.impactFactorYear ?? '年份未知'}）
+              </span>
+              <span>JIF/JCR 演示数据</span>
+            </>
+          )}
           <span>{paper.pendingSuggestionCount} 条待审核</span>
           {paper.latestJobId && (
             <AnalysisProgressPanel

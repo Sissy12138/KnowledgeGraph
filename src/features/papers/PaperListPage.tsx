@@ -97,6 +97,9 @@ function PaperCard({ paper }: { paper: PaperSummary }) {
   const authors = paper.authors.length
     ? paper.authors.map((author) => author.name).join('、')
     : '作者信息缺失'
+  const showDemoMetrics =
+    paper.metricSource === 'mock'
+    && paper.journal?.impactFactor != null
 
   return (
     <Link
@@ -113,6 +116,16 @@ function PaperCard({ paper }: { paper: PaperSummary }) {
         </div>
         <h2>{paper.title}</h2>
         <p className="paper-card__authors">{authors}</p>
+        {paper.journal && <p>{paper.journal.name}</p>}
+        {showDemoMetrics && paper.journal && (
+          <p>
+            <span>
+              JIF {paper.journal.impactFactor}
+              （{paper.journal.impactFactorYear ?? '年份未知'}）
+            </span>{' '}
+            <strong>JIF/JCR 演示数据</strong>
+          </p>
+        )}
         <div className="paper-card__footer">
           <span>{paper.doi ? `DOI ${paper.doi}` : '暂无 DOI'}</span>
           {paper.pendingSuggestionCount > 0 ? (

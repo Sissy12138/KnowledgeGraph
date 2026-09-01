@@ -1,34 +1,51 @@
+import type {
+  AuthorAffiliation,
+  AuthorExternalIds,
+  AuthorIdentityStatus,
+  JournalCategoryMetric,
+  PaperSource,
+  PaperStatus,
+  ResearchOverview,
+} from '../../contracts/v05.types'
 
-export type PaperStatus =
-  | 'unprocessed'
-  | 'queued'
-  | 'processing'
-  | 'pendingReview'
-  | 'completed'
-  | 'failed'
+export type { PaperSource, PaperStatus, ResearchOverview }
+
+export type PaperMetricSource = 'mock' | 'unavailable'
 
 export type AuthorSummary = {
-  id: string | null
+  id: string
   name: string
+  rawName: string
+  order: number
 }
 
-export type Author = AuthorSummary & {
-  affiliation: string | null
-  orcid: string | null
+export type Author = AuthorSummary
+
+export type AuthorOrcid = {
+  value: string
+  source: AuthorExternalIds['orcidSource']
+  authenticated: boolean
 }
 
-export type PaperSource = {
-  type: 'zotero' | 'academicSearch' | 'manual'
-  externalId: string | null
-  url: string | null
+export type AuthorDetailView = {
+  id: string
+  name: string
+  nameVariants: string[]
+  affiliations: AuthorAffiliation[]
+  identityStatus: AuthorIdentityStatus
+  mergedIntoAuthorId: string | null
+  orcid: AuthorOrcid | null
+  paperCount: number
+  createdAt: string
+  updatedAt: string
 }
 
-export type ResearchOverview = {
-  researchTopics: string[]
-  researchQuestion: string | null
-  sample: string | null
-  methods: string | null
-  mainResults: string | null
+export type JournalView = {
+  name: string
+  issn: string | null
+  impactFactor: number | null
+  impactFactorYear: number | null
+  categories: JournalCategoryMetric[]
 }
 
 export type PaperSummary = {
@@ -37,6 +54,8 @@ export type PaperSummary = {
   authors: AuthorSummary[]
   year: number | null
   doi: string | null
+  journal: JournalView | null
+  metricSource: PaperMetricSource
   status: PaperStatus
   latestJobId: string | null
   pendingSuggestionCount: number
@@ -54,19 +73,9 @@ export type PaperPage = {
 
 export type PaperListScenario = 'success' | 'empty' | 'error'
 
-export type PaperDetail = {
-  id: string
-  title: string
-  authors: Author[]
-  year: number | null
-  doi: string | null
+export type PaperDetail = PaperSummary & {
   abstract: string | null
   source: PaperSource
-  status: PaperStatus
-  latestJobId: string | null
   latestExtractionId: string | null
-  pendingSuggestionCount: number
   researchOverview: ResearchOverview | null
-  createdAt: string
-  updatedAt: string
 }

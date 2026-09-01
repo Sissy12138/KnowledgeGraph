@@ -10,14 +10,28 @@ const paperDetail: PaperDetail = {
   title: '用于详情测试的论文',
   authors: [
     {
-      id: null,
-      name: '测试作者',
-      affiliation: '测试实验室',
-      orcid: null,
+      id: 'author-test-a',
+      name: '测试作者甲',
+      rawName: 'Test A',
+      order: 1,
+    },
+    {
+      id: 'author-test-b',
+      name: '测试作者乙',
+      rawName: 'Test B',
+      order: 2,
     },
   ],
   year: 2026,
   doi: null,
+  journal: {
+    name: '测试期刊',
+    issn: '1234-5678',
+    impactFactor: 4.2,
+    impactFactorYear: 2024,
+    categories: [{ category: 'Neurosciences', quartile: 'Q2' }],
+  },
+  metricSource: 'mock',
   abstract: '这是一段用于验证详情页的摘要。',
   source: { type: 'manual', externalId: null, url: null },
   status: 'pendingReview',
@@ -79,6 +93,10 @@ describe('PaperDetailPage', () => {
       await screen.findByRole('heading', { name: '用于详情测试的论文' }),
     ).toBeInTheDocument()
     expect(screen.getByText('详情页面能否正确显示？')).toBeInTheDocument()
+    expect(screen.getByText('测试作者甲、测试作者乙')).toBeInTheDocument()
+    expect(screen.getByText('测试期刊')).toBeInTheDocument()
+    expect(screen.getByText('JIF 4.2（2024）')).toBeInTheDocument()
+    expect(screen.getByText('JIF/JCR 演示数据')).toBeInTheDocument()
     const paperHeader = screen.getByRole('banner')
     expect(
       await within(paperHeader).findByLabelText('解析进度'),
@@ -100,5 +118,24 @@ describe('PaperDetailPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('论文不存在。')
     expect(screen.getByRole('link', { name: '返回论文库' })).toBeInTheDocument()
+  })
+
+  it('正式数据指标不可用时不显示 JIF/JCR', async () => {
+    renderDetail(async () => ({
+      ...paperDetail,
+      journal: {
+        ...paperDetail.journal!,
+        impactFactor: null,
+        impactFactorYear: null,
+        categories: [],
+      },
+      metricSource: 'unavailable',
+    }))
+
+    expect(
+      await screen.findByRole('heading', { name: '用于详情测试的论文' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/JIF/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/JCR/)).not.toBeInTheDocument()
   })
 })

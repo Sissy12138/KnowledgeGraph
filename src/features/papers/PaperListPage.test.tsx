@@ -9,9 +9,20 @@ const onePaperPage: PaperPage = {
     {
       id: 'paper-test',
       title: '用于测试的论文',
-      authors: [{ id: null, name: '测试作者' }],
+      authors: [
+        { id: 'author-test-a', name: '测试作者甲', rawName: 'Test A', order: 1 },
+        { id: 'author-test-b', name: '测试作者乙', rawName: 'Test B', order: 2 },
+      ],
       year: 2026,
       doi: null,
+      journal: {
+        name: '测试期刊',
+        issn: null,
+        impactFactor: 4.2,
+        impactFactorYear: 2024,
+        categories: [{ category: 'Neurosciences', quartile: 'Q2' }],
+      },
+      metricSource: 'mock',
       status: 'pendingReview',
       latestJobId: 'job-test',
       pendingSuggestionCount: 3,
@@ -49,6 +60,10 @@ describe('PaperListPage', () => {
       await screen.findByRole('heading', { name: '用于测试的论文' }),
     ).toBeInTheDocument()
     expect(screen.getByText('3 条待审核')).toBeInTheDocument()
+    expect(screen.getByText('测试作者甲、测试作者乙')).toBeInTheDocument()
+    expect(screen.getByText('测试期刊')).toBeInTheDocument()
+    expect(screen.getByText('JIF 4.2（2024）')).toBeInTheDocument()
+    expect(screen.getByText('JIF/JCR 演示数据')).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: '查看论文详情：用于测试的论文' }),
     ).toHaveAttribute('href', '/papers/paper-test')
@@ -64,6 +79,34 @@ describe('PaperListPage', () => {
     )
 
     expect(await screen.findByText('还没有论文')).toBeInTheDocument()
+  })
+
+  it('正式数据指标不可用时不显示 JIF/JCR', async () => {
+    const unavailablePage: PaperPage = {
+      ...onePaperPage,
+      items: [{
+        ...onePaperPage.items[0],
+        journal: {
+          ...onePaperPage.items[0].journal!,
+          impactFactor: null,
+          impactFactorYear: null,
+          categories: [],
+        },
+        metricSource: 'unavailable',
+      }],
+    }
+
+    render(
+      <MemoryRouter>
+        <PaperListPage loadPapers={async () => unavailablePage} />
+      </MemoryRouter>,
+    )
+
+    expect(
+      await screen.findByRole('heading', { name: '用于测试的论文' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/JIF/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/JCR/)).not.toBeInTheDocument()
   })
 
   it('加载失败时显示错误信息', async () => {
