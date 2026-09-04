@@ -20,12 +20,16 @@ def main() -> None:
         default=backend_dir / "data" / "yanzhitu.sqlite3",
         help="研知图 SQLite 数据库路径",
     )
-    parser.add_argument("--limit", type=int, default=None, help="只导入最近修改的前 N 篇文献")
-    parser.add_argument("--dry-run", action="store_true", help="只读取并统计，不写数据库")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="只导入最近修改的前 N 篇文献"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="只读取并统计，不写数据库"
+    )
     args = parser.parse_args()
 
     try:
-        papers = read_papers(args.zotero_root, args.limit)
+        papers, collections = read_papers(args.zotero_root, args.limit)
     except RuntimeError as error:
         raise SystemExit(f"导入失败：{error}") from error
     author_count = len({author.id for paper in papers for author in paper.authors})
@@ -35,7 +39,7 @@ def main() -> None:
     print(f"PDF 附件：{pdf_count}")
 
     if not args.dry_run:
-        imported = import_papers(args.database, papers)
+        imported = import_papers(args.database, papers, collections)
         print(f"已写入：{imported}")
         print(f"数据库：{args.database}")
 

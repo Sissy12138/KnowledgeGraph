@@ -60,6 +60,22 @@ def _journal(row: sqlite3.Row) -> dict | None:
     }
 
 
+def _zotero_collections(connection: sqlite3.Connection, paper_id: str) -> list[dict]:
+    rows = connection.execute(
+        """
+        SELECT c.collection_key, c.name
+        FROM paper_zotero_collections pc
+        JOIN zotero_collections c
+          ON c.source_library_id = pc.source_library_id
+         AND c.collection_key = pc.collection_key
+        WHERE pc.paper_id = ?
+        ORDER BY c.name, c.collection_key
+        """,
+        (paper_id,),
+    ).fetchall()
+    return [{"key": row["collection_key"], "name": row["name"]} for row in rows]
+
+
 def _summary(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -68,6 +84,13 @@ def _summary(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
         "year": row["year"],
         "doi": row["doi"],
         "journal": _journal(row),
+        "hasPdf": bool(
+            connection.execute(
+                "SELECT 1 FROM paper_attachments WHERE paper_id = ? LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+        ),
+        "zoteroCollections": _zotero_collections(connection, row["id"]),
         "status": row["status"],
         "latestJobId": row["latest_job_id"],
         "pendingSuggestionCount": row["pending_suggestion_count"],

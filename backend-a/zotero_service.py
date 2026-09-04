@@ -5,7 +5,7 @@ from pathlib import Path
 from httpx import ConnectError
 from pyzotero import zotero
 
-from .models import AttachmentRecord, AuthorRecord, PaperRecord
+from .models import AttachmentRecord, AuthorRecord, PaperRecord, ZoteroCollectionRecord
 
 
 SUPPORTED_ITEM_TYPES = {
@@ -40,17 +40,24 @@ def _author_name(creator: dict) -> tuple[str, str | None, str | None]:
     return name.strip(), first_name, last_name
 
 
-def _pdf_attachments(client, item_key: str, zotero_root: Path) -> list[AttachmentRecord]:
+def _pdf_attachments(
+    client, item_key: str, zotero_root: Path
+) -> list[AttachmentRecord]:
     attachments = []
     for child in client.children(item_key):
         data = child.get("data", {})
-        if data.get("itemType") != "attachment" or data.get("contentType") != "application/pdf":
+        if (
+            data.get("itemType") != "attachment"
+            or data.get("contentType") != "application/pdf"
+        ):
             continue
 
         attachment_key = data.get("key") or child.get("key")
         path = data.get("path")
         if path and path.startswith("storage:"):
-            path = str(zotero_root / "storage" / attachment_key / path.removeprefix("storage:"))
+            path = str(
+                zotero_root / "storage" / attachment_key / path.removeprefix("storage:")
+            )
         if not path and data.get("filename"):
             path = str(zotero_root / "storage" / attachment_key / data["filename"])
         if not attachment_key or not path:
@@ -123,14 +130,35 @@ def paper_from_item(client, item: dict, zotero_root: Path) -> PaperRecord | None
         authors=authors,
         tags=tags,
         attachments=attachments,
+        collection_keys=[
+            key for key in data.get("collections", []) if isinstance(key, str) and key
+        ],
         source_created_at=data.get("dateAdded") or None,
         source_updated_at=data.get("dateModified") or None,
     )
 
 
-def read_papers(zotero_root: Path, limit: int | None = None) -> list[PaperRecord]:
+def read_papers(
+    zotero_root: Path,
+    limit: int | None = None,
+) -> tuple[list[PaperRecord], list[ZoteroCollectionRecord]]:
     client = create_local_client()
     try:
+        collections = []
+        for collection in client.everything(client.collections()):
+            data = collection["data"]
+            meta = collection.get("meta", {})
+            parent = data.get("parentCollection")
+            collections.append(
+                ZoteroCollectionRecord(
+                    source_library_id=int(collection.get("library", {}).get("id") or 0),
+                    key=data["key"],
+                    name=data["name"],
+                    parent_key=parent if isinstance(parent, str) else None,
+                    direct_item_count=int(meta.get("numItems", 0)),
+                    child_collection_count=int(meta.get("numCollections", 0)),
+                )
+            )
         items = client.all_top(sort="dateModified", direction="desc")
         items = [
             item
@@ -145,8 +173,10 @@ def read_papers(zotero_root: Path, limit: int | None = None) -> list[PaperRecord
             if (paper := paper_from_item(client, item, zotero_root)) is not None
         ]
     except ConnectError as error:
-        raise RuntimeError("无法连接 Zotero 本地接口。请先启动 Zotero，再重新执行导入命令。") from error
+        raise RuntimeError(
+            "无法连接 Zotero 本地接口。请先启动 Zotero，再重新执行导入命令。"
+        ) from error
     finally:
         client.client.close()
 
-    return papers
+    return papers, collections

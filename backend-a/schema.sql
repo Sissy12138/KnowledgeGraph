@@ -61,6 +61,29 @@ CREATE TABLE IF NOT EXISTS paper_attachments (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS zotero_collections (
+    source_library_id INTEGER NOT NULL,
+    collection_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    parent_collection_key TEXT,
+    direct_item_count INTEGER NOT NULL DEFAULT 0,
+    child_collection_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source_library_id, collection_key)
+);
+
+CREATE TABLE IF NOT EXISTS paper_zotero_collections (
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    source_library_id INTEGER NOT NULL,
+    collection_key TEXT NOT NULL,
+    PRIMARY KEY (paper_id, source_library_id, collection_key),
+    FOREIGN KEY (source_library_id, collection_key)
+        REFERENCES zotero_collections(source_library_id, collection_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_zotero_collections_collection
+    ON paper_zotero_collections(source_library_id, collection_key);
+
 CREATE TABLE IF NOT EXISTS zotero_sync_scope (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     mode TEXT NOT NULL CHECK (mode IN ('library', 'collections')),

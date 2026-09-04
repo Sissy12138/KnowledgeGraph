@@ -4,7 +4,7 @@ from pathlib import Path
 from httpx import ConnectError
 
 from .database import connect, import_papers
-from .models import PaperRecord
+from .models import PaperRecord, ZoteroCollectionRecord
 from .zotero_service import SUPPORTED_ITEM_TYPES, create_local_client, paper_from_item
 
 
@@ -28,13 +28,19 @@ def _selection(body: dict) -> dict:
     include_subcollections = body.get("includeSubcollections")
 
     if mode not in {"library", "collections"}:
-        raise ZoteroImportError(400, "INVALID_ZOTERO_SELECTION", "mode 必须是 library 或 collections")
+        raise ZoteroImportError(
+            400, "INVALID_ZOTERO_SELECTION", "mode 必须是 library 或 collections"
+        )
     if not isinstance(collection_keys, list) or not all(
         isinstance(key, str) and key.strip() for key in collection_keys
     ):
-        raise ZoteroImportError(400, "INVALID_ZOTERO_SELECTION", "collectionKeys 必须是字符串数组")
+        raise ZoteroImportError(
+            400, "INVALID_ZOTERO_SELECTION", "collectionKeys 必须是字符串数组"
+        )
     if not isinstance(include_subcollections, bool):
-        raise ZoteroImportError(400, "INVALID_ZOTERO_SELECTION", "includeSubcollections 必须是布尔值")
+        raise ZoteroImportError(
+            400, "INVALID_ZOTERO_SELECTION", "includeSubcollections 必须是布尔值"
+        )
 
     collection_keys = list(dict.fromkeys(key.strip() for key in collection_keys))
     if mode == "library" and (collection_keys or include_subcollections):
@@ -44,7 +50,9 @@ def _selection(body: dict) -> dict:
             "library 模式要求 collectionKeys=[] 且 includeSubcollections=false",
         )
     if mode == "collections" and not collection_keys:
-        raise ZoteroImportError(400, "INVALID_ZOTERO_SELECTION", "collections 模式至少选择一个文件夹")
+        raise ZoteroImportError(
+            400, "INVALID_ZOTERO_SELECTION", "collections 模式至少选择一个文件夹"
+        )
 
     return {
         "mode": mode,
@@ -64,6 +72,20 @@ def _collection_summary(collection: dict) -> dict:
         "directItemCount": int(meta.get("numItems", 0)),
         "childCollectionCount": int(meta.get("numCollections", 0)),
     }
+
+
+def _collection_record(collection: dict) -> ZoteroCollectionRecord:
+    data = collection["data"]
+    meta = collection.get("meta", {})
+    parent = data.get("parentCollection")
+    return ZoteroCollectionRecord(
+        source_library_id=int(collection.get("library", {}).get("id") or 0),
+        key=data["key"],
+        name=data["name"],
+        parent_key=parent if isinstance(parent, str) else None,
+        direct_item_count=int(meta.get("numItems", 0)),
+        child_collection_count=int(meta.get("numCollections", 0)),
+    )
 
 
 def _open_client():
@@ -104,7 +126,9 @@ def list_zotero_collections(database_path: Path) -> dict:
             for value in client.everything(client.collections())
         ]
     except ConnectError as error:
-        raise ZoteroImportError(503, "ZOTERO_UNAVAILABLE", "无法连接 Zotero 本地接口") from error
+        raise ZoteroImportError(
+            503, "ZOTERO_UNAVAILABLE", "无法连接 Zotero 本地接口"
+        ) from error
     finally:
         client.client.close()
     collections.sort(key=lambda value: (value["name"].casefold(), value["key"]))
@@ -128,7 +152,10 @@ def _selected_collection_keys(collections: list[dict], selection: dict) -> list[
         while changed:
             changed = False
             for key, collection in by_key.items():
-                if collection["data"].get("parentCollection") in selected and key not in selected:
+                if (
+                    collection["data"].get("parentCollection") in selected
+                    and key not in selected
+                ):
                     selected.add(key)
                     changed = True
     return sorted(selected)
@@ -137,18 +164,21 @@ def _selected_collection_keys(collections: list[dict], selection: dict) -> list[
 def _read_selected_papers(
     selection: dict,
     zotero_root: Path,
-) -> tuple[list[PaperRecord], int]:
+) -> tuple[list[PaperRecord], int, list[ZoteroCollectionRecord]]:
     client = _open_client()
     try:
+        raw_collections = client.everything(client.collections())
+        collection_records = [_collection_record(value) for value in raw_collections]
         if selection["mode"] == "library":
             items = client.all_top(sort="dateModified", direction="desc")
         else:
-            collections = client.everything(client.collections())
-            keys = _selected_collection_keys(collections, selection)
+            keys = _selected_collection_keys(raw_collections, selection)
             items_by_key = {}
             for key in keys:
                 items = client.everything(
-                    client.collection_items_top(key, sort="dateModified", direction="desc")
+                    client.collection_items_top(
+                        key, sort="dateModified", direction="desc"
+                    )
                 )
                 for item in items:
                     data = item.get("data", {})
@@ -166,9 +196,11 @@ def _read_selected_papers(
             paper = paper_from_item(client, item, zotero_root)
             if paper is not None:
                 papers.append(paper)
-        return papers, found_count
+        return papers, found_count, collection_records
     except ConnectError as error:
-        raise ZoteroImportError(503, "ZOTERO_UNAVAILABLE", "无法连接 Zotero 本地接口") from error
+        raise ZoteroImportError(
+            503, "ZOTERO_UNAVAILABLE", "无法连接 Zotero 本地接口"
+        ) from error
     finally:
         client.client.close()
 
@@ -210,7 +242,7 @@ def _classify(database_path: Path, papers: list[PaperRecord], found_count: int) 
 
 def preview_zotero_import(database_path: Path, zotero_root: Path, body: dict) -> dict:
     selection = _selection(body)
-    papers, found_count = _read_selected_papers(selection, zotero_root)
+    papers, found_count, _collections = _read_selected_papers(selection, zotero_root)
     return {"selection": selection, **_classify(database_path, papers, found_count)}
 
 
@@ -259,11 +291,13 @@ def import_zotero_selection(database_path: Path, zotero_root: Path, body: dict) 
     selection = _selection(body)
     save_as_sync_scope = body.get("saveAsSyncScope", True)
     if not isinstance(save_as_sync_scope, bool):
-        raise ZoteroImportError(400, "INVALID_ZOTERO_SELECTION", "saveAsSyncScope 必须是布尔值")
+        raise ZoteroImportError(
+            400, "INVALID_ZOTERO_SELECTION", "saveAsSyncScope 必须是布尔值"
+        )
 
-    papers, found_count = _read_selected_papers(selection, zotero_root)
+    papers, found_count, collections = _read_selected_papers(selection, zotero_root)
     result = _classify(database_path, papers, found_count)
-    import_papers(database_path, papers)
+    import_papers(database_path, papers, collections)
     if save_as_sync_scope:
         _save_selection(database_path, selection)
     return {
@@ -277,7 +311,9 @@ def import_zotero_selection(database_path: Path, zotero_root: Path, body: dict) 
 def sync_zotero(database_path: Path, zotero_root: Path) -> dict:
     selection = _saved_selection(database_path)
     if selection is None:
-        raise ZoteroImportError(409, "ZOTERO_SYNC_SCOPE_NOT_SET", "尚未保存 Zotero 同步范围")
+        raise ZoteroImportError(
+            409, "ZOTERO_SYNC_SCOPE_NOT_SET", "尚未保存 Zotero 同步范围"
+        )
     return import_zotero_selection(
         database_path,
         zotero_root,

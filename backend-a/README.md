@@ -85,14 +85,14 @@ http://127.0.0.1:8000/api/v1/zotero/collections
 |---|---|---|
 | `__init__.py` | 已实现 | 把 `backend` 标记为 Python 包。 |
 | `api.py` | 已实现 | A 的 API 入口；处理 Zotero、Paper、AnalysisJob、审核和 Graph 请求。 |
-| `models.py` | 已实现 | 定义 Zotero 导入使用的 Paper、Author 和 Attachment 数据对象。 |
+| `models.py` | 已实现 | 定义 Zotero 导入使用的 Paper、Author、Attachment 和 Collection 数据对象。 |
 | `schemas.py` | 已实现 | 定义 v06 沿用的分析、审核和 Graph 枚举及基础校验。 |
-| `schema.sql` | 已实现 | 创建论文、作者、PDF、同步范围、分析、审核和 Graph 数据表。 |
+| `schema.sql` | 已实现 | 创建论文、作者、PDF、Collection归属、同步范围、分析、审核和 Graph 数据表。 |
 | `database.py` | 已实现 | 建立数据库连接，并把 Zotero 文献写入研知图数据库。 |
 | `zotero_service.py` | 已实现 | 通过 Pyzotero 读取 Zotero 本地 API。 |
 | `import_zotero.py` | 已实现 | Zotero 导入命令入口。 |
 | `zotero_import_service.py` | 已实现 | 读取 Collection、生成预览、按文件夹导入并保存同步范围；真实Collection与预览已验证。 |
-| `paper_repository.py` | 已实现 | 查询 Paper，并按 v06 返回 `PaperAuthor`、分页和最新 ResearchOverview。 |
+| `paper_repository.py` | 已实现 | 查询 Paper，并按 v06 逐篇返回 `hasPdf`、`zoteroCollections`、作者和最新 ResearchOverview。 |
 | `analysis_job_repository.py` | 已实现 | 创建、查询和取消 AnalysisJob。 |
 | `analysis_service.py` | 已实现 | 校验和保存 B 的分析结果，生成 Extraction、Evidence 和 Suggestion。 |
 | `review_service.py` | 已实现 | 查询、采纳和拒绝 Suggestion，处理多目标事务和 superseded。 |

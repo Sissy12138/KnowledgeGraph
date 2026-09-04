@@ -110,7 +110,10 @@ Zotero 本地 API → Paper / Author / Journal 元数据 → 研知图 SQLite �
 - 作者及署名顺序；
 - 期刊名称和 ISSN；
 - Zotero 标签；
-- 本地 PDF 路径。
+- 本地 PDF 路径；
+- 每篇论文所属的全部 Zotero Collection。
+
+Paper 列表和详情会返回 `hasPdf` 与 `zoteroCollections`。本机 PDF 绝对路径只保存在 A 的数据库中，不直接返回给 C。
 
 笔记、批注、概念、方法和发现不从 Zotero 导入。概念、方法和发现后续由 B 分析论文产生。
 

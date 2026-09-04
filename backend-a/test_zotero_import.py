@@ -9,7 +9,7 @@ from .api import create_app
 from .database import connect
 
 
-def _item(key: str, title: str, modified: str) -> dict:
+def _item(key: str, title: str, modified: str, collection_keys: list[str]) -> dict:
     return {
         "key": key,
         "library": {"id": 1},
@@ -23,6 +23,7 @@ def _item(key: str, title: str, modified: str) -> dict:
             "dateModified": modified,
             "creators": [{"creatorType": "author", "firstName": "A", "lastName": key}],
             "tags": [],
+            "collections": collection_keys,
         },
     }
 
@@ -30,16 +31,24 @@ def _item(key: str, title: str, modified: str) -> dict:
 class FakeZoteroClient:
     collection_data = [
         {
+            "library": {"id": 1},
             "data": {"key": "PARENT", "name": "父文件夹", "parentCollection": False},
             "meta": {"numItems": 1, "numCollections": 1},
         },
         {
+            "library": {"id": 1},
             "data": {"key": "CHILD", "name": "子文件夹", "parentCollection": "PARENT"},
             "meta": {"numItems": 2, "numCollections": 0},
         },
     ]
-    paper_1 = _item("PAPER1", "论文一", "2026-09-01T00:00:00Z")
-    paper_2 = _item("PAPER2", "论文二", "2026-09-02T00:00:00Z")
+    paper_1 = _item(
+        "PAPER1",
+        "论文一",
+        "2026-09-01T00:00:00Z",
+        ["PARENT", "CHILD"],
+    )
+    paper_1["meta"]["numChildren"] = 1
+    paper_2 = _item("PAPER2", "论文二", "2026-09-02T00:00:00Z", ["CHILD"])
     items = {
         "PARENT": [paper_1],
         "CHILD": [paper_1, paper_2],
@@ -55,7 +64,11 @@ class FakeZoteroClient:
         return [self.paper_1]
 
     def all_top(self, **_kwargs):
-        return list({item["key"]: item for values in self.items.values() for item in values}.values())
+        return list(
+            {
+                item["key"]: item for values in self.items.values() for item in values
+            }.values()
+        )
 
     def collections(self):
         return self.collection_data
@@ -68,8 +81,20 @@ class FakeZoteroClient:
         return query
 
     @staticmethod
-    def children(_key):
-        return []
+    def children(key):
+        if key != "PAPER1":
+            return []
+        return [
+            {
+                "key": "PDF1",
+                "data": {
+                    "key": "PDF1",
+                    "itemType": "attachment",
+                    "contentType": "application/pdf",
+                    "path": "storage:paper1.pdf",
+                },
+            }
+        ]
 
 
 class ZoteroImportTest(unittest.TestCase):
@@ -93,7 +118,11 @@ class ZoteroImportTest(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _request(self, method: str, path: str, body: dict | None = None):
-        raw = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else b""
+        raw = (
+            json.dumps(body, ensure_ascii=False).encode("utf-8")
+            if body is not None
+            else b""
+        )
         environ = {
             "REQUEST_METHOD": method,
             "PATH_INFO": path,
@@ -131,6 +160,8 @@ class ZoteroImportTest(unittest.TestCase):
         self.assertEqual("200 OK", status)
         self.assertEqual(2, preview["foundCount"])
         self.assertEqual(2, preview["createdCount"])
+        self.assertEqual(1, preview["withPdfCount"])
+        self.assertEqual(1, preview["missingPdfCount"])
 
         status, imported = self._request(
             "POST",
@@ -142,15 +173,31 @@ class ZoteroImportTest(unittest.TestCase):
         self.assertEqual(2, len(imported["paperIds"]))
 
         connection = connect(self.database_path)
-        self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM papers").fetchone()[0])
+        self.assertEqual(
+            2, connection.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+        )
         connection.close()
+
+        status, papers = self._request("GET", "/api/v1/papers")
+        self.assertEqual("200 OK", status)
+        papers_by_title = {paper["title"]: paper for paper in papers["items"]}
+        self.assertTrue(papers_by_title["论文一"]["hasPdf"])
+        self.assertFalse(papers_by_title["论文二"]["hasPdf"])
+        self.assertCountEqual(
+            ["父文件夹", "子文件夹"],
+            [value["name"] for value in papers_by_title["论文一"]["zoteroCollections"]],
+        )
+        self.assertEqual(
+            [{"key": "CHILD", "name": "子文件夹"}],
+            papers_by_title["论文二"]["zoteroCollections"],
+        )
 
         status, synced = self._request("POST", "/api/v1/zotero/sync")
         self.assertEqual("200 OK", status)
         self.assertEqual(2, synced["unchangedCount"])
 
         FakeZoteroClient.items["CHILD"].append(
-            _item("PAPER3", "论文三", "2026-09-03T00:00:00Z")
+            _item("PAPER3", "论文三", "2026-09-03T00:00:00Z", ["CHILD"])
         )
         status, synced = self._request("POST", "/api/v1/zotero/sync")
         self.assertEqual("200 OK", status)

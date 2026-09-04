@@ -20,6 +20,16 @@ class AttachmentRecord:
 
 
 @dataclass
+class ZoteroCollectionRecord:
+    source_library_id: int
+    key: str
+    name: str
+    parent_key: str | None
+    direct_item_count: int
+    child_collection_count: int
+
+
+@dataclass
 class PaperRecord:
     id: str
     source_library_id: int
@@ -36,5 +46,6 @@ class PaperRecord:
     authors: list[AuthorRecord] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     attachments: list[AttachmentRecord] = field(default_factory=list)
+    collection_keys: list[str] = field(default_factory=list)
     source_created_at: str | None = None
     source_updated_at: str | None = None
