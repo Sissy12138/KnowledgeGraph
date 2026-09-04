@@ -148,7 +148,7 @@ React 组件通过 `ref` 创建和销毁 ECharts 实例，不额外引入 React 
 ## 8. 代码模块
 
 ```text
-src/features/graph/
+frontend/src/features/graph/
 ├── GraphPage.tsx
 ├── GraphPage.css
 ├── GraphToolbar.tsx
