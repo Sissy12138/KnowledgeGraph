@@ -24,9 +24,13 @@ export type AnalysisJobError = {
 export type AnalysisJob = {
   id: string
   paperId: string
+  paperTitle?: string
+  paperJournal?: string | null
+  paperYear?: number | null
   status: AnalysisJobStatus
   progress: number
   stage: AnalysisStage
+  resultMode?: 'preserve' | 'replace'
   error: AnalysisJobError | null
   createdAt: string
   startedAt: string | null

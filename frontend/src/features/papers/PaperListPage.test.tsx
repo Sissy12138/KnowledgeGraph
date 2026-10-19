@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { describe, expect, it, vi } from 'vitest'
 import type { PaperPage } from './paper.types'
 import PaperListPage from './PaperListPage'
 
@@ -67,6 +68,21 @@ describe('PaperListPage', () => {
     expect(
       screen.getByRole('link', { name: '查看论文详情：用于测试的论文' }),
     ).toHaveAttribute('href', '/papers/paper-test')
+  })
+
+  it('一键分析仅提交仍未解析的新导入论文，并在没有候选时给出提示', async () => {
+    const user = userEvent.setup()
+    const startNewAnalyses = vi.fn(async () => ({ createdCount: 0, jobs: [] }))
+    render(
+      <MemoryRouter>
+        <PaperListPage loadPapers={async () => onePaperPage} startNewAnalyses={startNewAnalyses} />
+      </MemoryRouter>,
+    )
+
+    await user.click(await screen.findByRole('button', { name: '一键分析新导入文献' }))
+
+    expect(startNewAnalyses).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('status')).toHaveTextContent('没有待分析的新导入论文')
   })
 
   it('没有论文时显示空态提示', async () => {

@@ -13,6 +13,7 @@ type PaperReviewGroupProps = {
     labelOverrides: Record<string, string>,
   ) => Promise<void>
   onReject?: (suggestion: Suggestion, reason: string | null) => Promise<void>
+  onReopen?: (suggestion: Suggestion) => Promise<void>
   batchBusy?: boolean
   onReviewMany?: (
     ids: string[],
@@ -29,6 +30,7 @@ export default function PaperReviewGroup({
   busyId = null,
   onAccept,
   onReject,
+  onReopen,
   batchBusy = false,
   onReviewMany,
 }: PaperReviewGroupProps) {
@@ -103,6 +105,7 @@ export default function PaperReviewGroup({
               key={category.operation}
               onAccept={onAccept}
               onReject={onReject}
+              onReopen={onReopen}
             />
           ))}
         </div>

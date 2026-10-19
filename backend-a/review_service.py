@@ -53,7 +53,37 @@ def _evidence_ids(connection: sqlite3.Connection, suggestion_id: str) -> list[st
     ]
 
 
+def _formal_node_label(
+    connection: sqlite3.Connection,
+    node_id: str,
+    node_type: str,
+) -> str:
+    """Resolve a graph endpoint ID to the human-readable label used in review."""
+    if node_type == "paper":
+        row = connection.execute("SELECT title AS label FROM papers WHERE id = ?", (node_id,)).fetchone()
+    elif node_type == "author":
+        row = connection.execute("SELECT name AS label FROM authors WHERE id = ?", (node_id,)).fetchone()
+    else:
+        row = connection.execute(
+            "SELECT label FROM graph_nodes WHERE id = ? AND node_type = ?",
+            (node_id, node_type),
+        ).fetchone()
+    return row["label"] if row and row["label"] else node_id
+
+
 def _suggestion(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    proposed_change = json.loads(row["proposed_change"])
+    if proposed_change.get("type") == "addRelation":
+        proposed_change["sourceLabel"] = _formal_node_label(
+            connection,
+            proposed_change["sourceId"],
+            proposed_change["sourceType"],
+        )
+        proposed_change["targetLabel"] = _formal_node_label(
+            connection,
+            proposed_change["targetId"],
+            proposed_change["targetType"],
+        )
     return {
         "id": row["id"],
         "paperId": row["paper_id"],
@@ -64,7 +94,7 @@ def _suggestion(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
         "reason": row["reason"],
         "confidence": row["confidence"],
         "evidenceIds": _evidence_ids(connection, row["id"]),
-        "proposedChange": json.loads(row["proposed_change"]),
+        "proposedChange": proposed_change,
         "executionResult": json.loads(row["execution_result"]) if row["execution_result"] else None,
         "reviewedAt": _utc(row["reviewed_at"]),
         "supersededAt": _utc(row["superseded_at"]),
@@ -341,6 +371,12 @@ def _activate_relation_candidates(connection: sqlite3.Connection, extraction_id:
         if row["relation_type"] == "relatedTo" and source_id > target_id:
             source_id, target_id = target_id, source_id
             source_type, target_type = target_type, source_type
+        if source_id == target_id:
+            connection.execute(
+                "UPDATE relation_candidates SET status = 'discarded', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (row["id"],),
+            )
+            continue
         if RELATION_ENDPOINTS.get(row["relation_type"]) != (source_type, target_type):
             raise ReviewError("INVALID_RELATION", "延迟关系候选的端点类型不合法", 422)
 
@@ -418,17 +454,47 @@ def _discard_relation_refs(
     if not refs:
         return
     placeholders = ",".join("?" for _ in refs)
-    connection.execute(
+    candidates = connection.execute(
         f"""
-        UPDATE relation_candidates
-        SET status = 'discarded', updated_at = CURRENT_TIMESTAMP
-        WHERE extraction_id = ? AND status = 'pending' AND (
+        SELECT * FROM relation_candidates
+        WHERE extraction_id = ? AND status NOT IN ('discarded', 'superseded') AND (
             (source_ref_type = ? AND source_ref_value IN ({placeholders})) OR
             (target_ref_type = ? AND target_ref_value IN ({placeholders}))
         )
         """,
         [extraction_id, ref_type, *refs, ref_type, *refs],
-    )
+    ).fetchall()
+    affected_papers: set[str] = set()
+    for candidate in candidates:
+        if candidate["suggestion_id"]:
+            linked = connection.execute(
+                "SELECT * FROM suggestions WHERE id = ?", (candidate["suggestion_id"],)
+            ).fetchone()
+            if linked and linked["status"] == "accepted":
+                _rollback_acceptance(connection, linked, requeue_dependencies=False)
+            if linked and linked["status"] in {"pending", "accepted"}:
+                connection.execute(
+                    """
+                    UPDATE suggestions
+                    SET status = 'rejected', execution_result = NULL,
+                        reviewed_at = CURRENT_TIMESTAMP, superseded_at = NULL,
+                        review_comment = '因关联概念或方法被拒绝，系统自动拒绝此关系。',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (linked["id"],),
+                )
+                affected_papers.add(linked["paper_id"])
+        connection.execute(
+            """
+            UPDATE relation_candidates
+            SET status = 'discarded', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (candidate["id"],),
+        )
+    for paper_id in affected_papers:
+        _refresh_paper(connection, paper_id)
 
 
 def _refresh_paper(connection: sqlite3.Connection, paper_id: str) -> None:
@@ -469,6 +535,440 @@ def _check_pending(row: sqlite3.Row) -> None:
                 "reviewedAt": _utc(row["reviewed_at"]),
             },
         )
+
+
+def _execution_artifacts(execution: dict | None) -> tuple[set[str], set[str]]:
+    """Return graph node and edge IDs referenced by one accepted execution."""
+    if not execution:
+        return set(), set()
+    if execution.get("type") == "resolveMatch":
+        targets = execution.get("resolvedTargets")
+        if not isinstance(targets, list):
+            return set(), set()
+        return (
+            {target["nodeId"] for target in targets if isinstance(target, dict) and isinstance(target.get("nodeId"), str)},
+            {target["relationId"] for target in targets if isinstance(target, dict) and isinstance(target.get("relationId"), str)},
+        )
+    if execution.get("type") == "addFinding":
+        node_id, relation_id = execution.get("nodeId"), execution.get("relationId")
+        return (
+            {node_id} if isinstance(node_id, str) else set(),
+            {relation_id} if isinstance(relation_id, str) else set(),
+        )
+    if execution.get("type") == "addRelation":
+        relation_id = execution.get("relationId")
+        return set(), {relation_id} if isinstance(relation_id, str) else set()
+    return set(), set()
+
+
+def _other_accepted_references(
+    connection: sqlite3.Connection,
+    suggestion_id: str,
+    artifact_id: str,
+    artifact_type: str,
+) -> bool:
+    for row in connection.execute(
+        """
+        SELECT execution_result FROM suggestions
+        WHERE status = 'accepted' AND id != ? AND execution_result IS NOT NULL
+        """,
+        (suggestion_id,),
+    ).fetchall():
+        nodes, edges = _execution_artifacts(json.loads(row["execution_result"]))
+        if artifact_id in (nodes if artifact_type == "node" else edges):
+            return True
+    return False
+
+
+def _without_json_value(raw: str, value: str) -> str:
+    return _json([item for item in json.loads(raw) if item != value])
+
+
+def _rollback_edge(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    edge_id: str,
+    evidence_ids: list[str],
+) -> None:
+    if _other_accepted_references(connection, row["id"], edge_id, "edge"):
+        return
+    if evidence_ids:
+        placeholders = ",".join("?" for _ in evidence_ids)
+        connection.execute(
+            f"DELETE FROM graph_edge_evidence WHERE edge_id = ? AND evidence_id IN ({placeholders})",
+            [edge_id, *evidence_ids],
+        )
+    remaining = connection.execute(
+        "SELECT COUNT(*) FROM graph_edge_evidence WHERE edge_id = ?", (edge_id,)
+    ).fetchone()[0]
+    edge = connection.execute("SELECT source_paper_ids FROM graph_edges WHERE id = ?", (edge_id,)).fetchone()
+    if not edge:
+        return
+    if remaining == 0:
+        connection.execute("DELETE FROM graph_edges WHERE id = ?", (edge_id,))
+    else:
+        connection.execute(
+            "UPDATE graph_edges SET source_paper_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (_without_json_value(edge["source_paper_ids"], row["paper_id"]), edge_id),
+        )
+
+
+def _rollback_node(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    node_id: str,
+    created: bool,
+    alias: str | None,
+) -> None:
+    if _other_accepted_references(connection, row["id"], node_id, "node"):
+        return
+    node = connection.execute(
+        "SELECT aliases, source_paper_ids FROM graph_nodes WHERE id = ?", (node_id,)
+    ).fetchone()
+    if not node:
+        return
+    edge_count = connection.execute(
+        "SELECT COUNT(*) FROM graph_edges WHERE source_id = ? OR target_id = ?",
+        (node_id, node_id),
+    ).fetchone()[0]
+    if created and edge_count == 0:
+        connection.execute("DELETE FROM graph_nodes WHERE id = ?", (node_id,))
+        return
+    aliases = json.loads(node["aliases"])
+    if alias:
+        aliases = [value for value in aliases if value.casefold() != alias.casefold()]
+    connection.execute(
+        """
+        UPDATE graph_nodes
+        SET aliases = ?, source_paper_ids = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            _json(aliases),
+            _without_json_value(node["source_paper_ids"], row["paper_id"]),
+            node_id,
+        ),
+    )
+
+
+def _reset_dependent_relations(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    ref_type: str,
+    refs: list[str],
+    requeue: bool,
+) -> None:
+    if not refs:
+        return
+    if not requeue:
+        _discard_relation_refs(connection, row["extraction_id"], ref_type, refs)
+        return
+    placeholders = ",".join("?" for _ in refs)
+    candidates = connection.execute(
+        f"""
+        SELECT * FROM relation_candidates
+        WHERE extraction_id = ? AND (
+            (source_ref_type = ? AND source_ref_value IN ({placeholders})) OR
+            (target_ref_type = ? AND target_ref_value IN ({placeholders}))
+        )
+        """,
+        [row["extraction_id"], ref_type, *refs, ref_type, *refs],
+    ).fetchall()
+    for candidate in candidates:
+        linked_status = None
+        if candidate["suggestion_id"]:
+            linked = connection.execute(
+                "SELECT status FROM suggestions WHERE id = ?", (candidate["suggestion_id"],)
+            ).fetchone()
+            linked_status = linked["status"] if linked else None
+            if linked_status == "accepted":
+                # Reopening an entity does not silently overturn a separately
+                # accepted relation. If the entity is ultimately rejected,
+                # _discard_relation_refs will reject and roll it back.
+                continue
+            if linked_status == "pending":
+                connection.execute(
+                    """
+                    UPDATE suggestions
+                    SET status = 'superseded', superseded_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (candidate["suggestion_id"],),
+                )
+        if linked_status == "rejected":
+            continue
+        connection.execute(
+            """
+            UPDATE relation_candidates
+            SET status = ?, suggestion_id = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            ("pending", candidate["id"]),
+        )
+
+
+def _rollback_acceptance(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    requeue_dependencies: bool,
+) -> None:
+    execution = json.loads(row["execution_result"]) if row["execution_result"] else None
+    if not execution:
+        raise ReviewError("ACCEPTED_RESULT_MISSING", "已采纳建议缺少可撤回的执行记录", 409)
+    proposed = json.loads(row["proposed_change"])
+    evidence_ids = _evidence_ids(connection, row["id"])
+
+    if execution.get("type") == "resolveMatch":
+        owner_type = "concept" if row["operation"] == "resolveConceptMatch" else "method"
+        owner_id = proposed["extractedConceptId" if owner_type == "concept" else "extractedMethodId"]
+        item_table = "extracted_concepts" if owner_type == "concept" else "extracted_methods"
+        item = connection.execute(f"SELECT raw_text FROM {item_table} WHERE id = ?", (owner_id,)).fetchone()
+        targets = execution.get("resolvedTargets") or []
+        candidate_rows = connection.execute(
+            "SELECT client_ref, kind FROM resolution_candidates WHERE owner_type = ? AND owner_id = ?",
+            (owner_type, owner_id),
+        ).fetchall()
+        candidate_refs = [value["client_ref"] for value in candidate_rows]
+        if not requeue_dependencies:
+            # Remove dependent relation edges first so a newly created entity
+            # can be deleted instead of being left as an orphan node.
+            _reset_dependent_relations(
+                connection, row, "resolutionCandidateRef", candidate_refs, False,
+            )
+        for target in targets:
+            _rollback_edge(connection, row, target["relationId"], evidence_ids)
+        for target in targets:
+            _rollback_node(
+                connection, row, target["nodeId"], bool(target.get("created")),
+                item["raw_text"] if item else None,
+            )
+            connection.execute(
+                "UPDATE resolution_candidates SET resolved_node_id = NULL WHERE id = ?",
+                (target["candidateId"],),
+            )
+        inferred_status = "uncertain" if any(value["kind"] == "existing" for value in candidate_rows) else "new"
+        connection.execute(
+            f"UPDATE {item_table} SET match_status = ?, matched_node_ids = '[]' WHERE id = ?",
+            (inferred_status, owner_id),
+        )
+        if requeue_dependencies:
+            _reset_dependent_relations(
+                connection, row, "resolutionCandidateRef", candidate_refs, True,
+            )
+        return
+
+    if execution.get("type") == "addFinding":
+        finding = connection.execute(
+            "SELECT client_ref, statement FROM extracted_findings WHERE id = ?",
+            (proposed["extractedFindingId"],),
+        ).fetchone()
+        if finding and not requeue_dependencies:
+            _reset_dependent_relations(
+                connection, row, "findingRef", [finding["client_ref"]], False,
+            )
+        _rollback_edge(connection, row, execution["relationId"], evidence_ids)
+        node = connection.execute(
+            "SELECT source_paper_ids FROM graph_nodes WHERE id = ?", (execution["nodeId"],)
+        ).fetchone()
+        created = bool(node and json.loads(node["source_paper_ids"]) == [row["paper_id"]])
+        _rollback_node(
+            connection, row, execution["nodeId"], created,
+            finding["statement"] if finding else None,
+        )
+        connection.execute(
+            "UPDATE extracted_findings SET formal_node_id = NULL WHERE id = ?",
+            (proposed["extractedFindingId"],),
+        )
+        if finding and requeue_dependencies:
+            _reset_dependent_relations(
+                connection, row, "findingRef", [finding["client_ref"]], True,
+            )
+        return
+
+    if execution.get("type") == "addRelation":
+        _rollback_edge(connection, row, execution["relationId"], evidence_ids)
+        return
+    raise ReviewError("ACCEPTED_RESULT_INVALID", "已采纳建议的执行记录无法撤回", 409)
+
+
+def replace_previous_analysis_results(
+    connection: sqlite3.Connection,
+    paper_id: str,
+    keep_extraction_id: str | None = None,
+) -> dict:
+    """Remove one paper's previous analysis contribution inside a caller transaction.
+
+    The caller is responsible for wrapping this operation and the insertion of a
+    replacement result in the same transaction. Accepted relation suggestions
+    are rolled back before entity suggestions so nodes created only for this
+    paper can be removed safely. Results belonging to other papers are retained.
+    """
+    extraction_parameters: list[str] = [paper_id]
+    extraction_filter = "paper_id = ?"
+    if keep_extraction_id is not None:
+        extraction_filter += " AND id != ?"
+        extraction_parameters.append(keep_extraction_id)
+
+    extraction_rows = connection.execute(
+        f"SELECT id FROM extractions WHERE {extraction_filter}",
+        extraction_parameters,
+    ).fetchall()
+    extraction_ids = [row["id"] for row in extraction_rows]
+    accepted_rows: list[sqlite3.Row] = []
+    placeholders = ",".join("?" for _ in extraction_ids)
+    if extraction_ids:
+        accepted_rows = connection.execute(
+            f"""
+            SELECT * FROM suggestions
+            WHERE extraction_id IN ({placeholders}) AND status = 'accepted'
+            ORDER BY CASE WHEN operation = 'addRelation' THEN 0 ELSE 1 END,
+                     created_at DESC, id DESC
+            """,
+            extraction_ids,
+        ).fetchall()
+
+    # Mark the full old set first. This prevents suggestions in two old
+    # extractions of the same paper from incorrectly keeping each other's
+    # artifacts alive while the set is being rolled back.
+    if accepted_rows:
+        accepted_ids = [row["id"] for row in accepted_rows]
+        accepted_placeholders = ",".join("?" for _ in accepted_ids)
+        connection.execute(
+            f"""
+            UPDATE suggestions
+            SET status = 'superseded', superseded_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id IN ({accepted_placeholders})
+            """,
+            accepted_ids,
+        )
+        for row in accepted_rows:
+            _rollback_acceptance(connection, row, requeue_dependencies=False)
+
+    if extraction_ids:
+        connection.execute(
+            f"DELETE FROM extractions WHERE id IN ({placeholders})",
+            extraction_ids,
+        )
+
+    # A citation is written directly (without a review suggestion). During a
+    # normal replace there is no kept extraction, so remove it now; the new
+    # successful submission will immediately recreate current citations.
+    kept_node_ids: set[str] = set()
+    kept_edge_ids: set[str] = set()
+    if keep_extraction_id is not None:
+        for kept in connection.execute(
+            """
+            SELECT execution_result FROM suggestions
+            WHERE extraction_id = ? AND status = 'accepted'
+                  AND execution_result IS NOT NULL
+            """,
+            (keep_extraction_id,),
+        ).fetchall():
+            node_ids, edge_ids = _execution_artifacts(json.loads(kept["execution_result"]))
+            kept_node_ids.update(node_ids)
+            kept_edge_ids.update(edge_ids)
+        # Citation edges are direct extraction output and do not have a
+        # suggestion execution record. Keep current citations in post-hoc
+        # cleanup; normal replace removes and recreates them below.
+        kept_edge_ids.update(
+            row["id"] for row in connection.execute(
+                """
+                SELECT id FROM graph_edges
+                WHERE source_id = ? AND source_type = 'paper' AND relation_type = 'cites'
+                """,
+                (paper_id,),
+            ).fetchall()
+        )
+    else:
+        connection.execute(
+            "DELETE FROM graph_edges WHERE source_id = ? AND source_type = 'paper' AND relation_type = 'cites'",
+            (paper_id,),
+        )
+
+    # Shared graph artifacts remain, but their provenance must no longer
+    # claim the replaced paper unless the explicitly kept latest extraction
+    # still has an accepted execution that references the artifact.
+    for edge in connection.execute(
+        "SELECT id, source_paper_ids FROM graph_edges"
+    ).fetchall():
+        source_ids = json.loads(edge["source_paper_ids"])
+        if paper_id not in source_ids or edge["id"] in kept_edge_ids:
+            continue
+        remaining_sources = [value for value in source_ids if value != paper_id]
+        evidence_count = connection.execute(
+            "SELECT COUNT(*) FROM graph_edge_evidence WHERE edge_id = ?", (edge["id"],)
+        ).fetchone()[0]
+        if not remaining_sources and evidence_count == 0:
+            connection.execute("DELETE FROM graph_edges WHERE id = ?", (edge["id"],))
+        else:
+            connection.execute(
+                "UPDATE graph_edges SET source_paper_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (_json(remaining_sources), edge["id"]),
+            )
+
+    for node in connection.execute(
+        "SELECT id, source_paper_ids FROM graph_nodes"
+    ).fetchall():
+        source_ids = json.loads(node["source_paper_ids"])
+        if paper_id not in source_ids or node["id"] in kept_node_ids:
+            continue
+        remaining_sources = [value for value in source_ids if value != paper_id]
+        edge_count = connection.execute(
+            "SELECT COUNT(*) FROM graph_edges WHERE source_id = ? OR target_id = ?",
+            (node["id"], node["id"]),
+        ).fetchone()[0]
+        if not remaining_sources and edge_count == 0:
+            connection.execute("DELETE FROM graph_nodes WHERE id = ?", (node["id"],))
+        else:
+            connection.execute(
+                "UPDATE graph_nodes SET source_paper_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (_json(remaining_sources), node["id"]),
+            )
+
+    return {
+        "removedExtractions": len(extraction_ids),
+        "rolledBackSuggestions": len(accepted_rows),
+    }
+
+
+def reopen_suggestion(database_path: Path, suggestion_id: str) -> dict:
+    connection = connect(database_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        with connection:
+            row = connection.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+            if not row:
+                raise ReviewError("SUGGESTION_NOT_FOUND", "未找到指定建议", 404)
+            if row["status"] != "accepted":
+                raise ReviewError(
+                    "SUGGESTION_NOT_ACCEPTED", "只有已采纳建议可以重新加入待审核", 409,
+                    {"suggestionId": row["id"], "currentStatus": row["status"]},
+                )
+            extraction = connection.execute(
+                "SELECT is_latest FROM extractions WHERE id = ?", (row["extraction_id"],)
+            ).fetchone()
+            if not extraction or not extraction["is_latest"]:
+                raise ReviewError(
+                    "SUGGESTION_REOPEN_STALE", "该建议属于旧版分析结果，不能重新加入当前待审核队列", 409,
+                    {"suggestionId": row["id"]},
+                )
+            _rollback_acceptance(connection, row, requeue_dependencies=True)
+            connection.execute(
+                """
+                UPDATE suggestions
+                SET status = 'pending', execution_result = NULL, reviewed_at = NULL,
+                    superseded_at = NULL, review_comment = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (suggestion_id,),
+            )
+            _refresh_paper(connection, row["paper_id"])
+            updated = connection.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+        return _suggestion(connection, updated)
+    finally:
+        connection.close()
 
 
 def accept_suggestion(database_path: Path, suggestion_id: str, payload: dict) -> dict:
@@ -590,10 +1090,21 @@ def accept_suggestion(database_path: Path, suggestion_id: str, payload: dict) ->
                         raise ReviewError("INVALID_RESOLUTION", "最终正式节点不能重复", 400)
 
                     if not created:
-                        node = connection.execute("SELECT source_paper_ids FROM graph_nodes WHERE id = ?", (node_id,)).fetchone()
+                        node = connection.execute(
+                            "SELECT source_paper_ids, aliases FROM graph_nodes WHERE id = ?",
+                            (node_id,),
+                        ).fetchone()
                         connection.execute(
-                            "UPDATE graph_nodes SET source_paper_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            (_merge_json_list(node["source_paper_ids"], [row["paper_id"]]), node_id),
+                            """
+                            UPDATE graph_nodes
+                            SET source_paper_ids = ?, aliases = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                            """,
+                            (
+                                _merge_json_list(node["source_paper_ids"], [row["paper_id"]]),
+                                _merge_json_list(node["aliases"], [item["raw_text"]]),
+                                node_id,
+                            ),
                         )
                     relation_type = "studies" if owner_type == "concept" else "uses"
                     relation_id = _create_or_reuse_edge(
@@ -690,6 +1201,8 @@ def accept_suggestion(database_path: Path, suggestion_id: str, payload: dict) ->
             else:
                 if body.get("resolution") is not None:
                     raise ReviewError("INVALID_REQUEST", "addRelation 的 resolution 必须为 null", 400)
+                if proposed["sourceId"] == proposed["targetId"]:
+                    raise ReviewError("INVALID_RELATION", "关系的起点和终点不能是同一节点", 422)
                 source_type = _formal_node_type(connection, proposed["sourceId"])
                 target_type = _formal_node_type(connection, proposed["targetId"])
                 if source_type != proposed["sourceType"] or target_type != proposed["targetType"]:
@@ -751,7 +1264,10 @@ def reject_suggestion(database_path: Path, suggestion_id: str, payload: dict) ->
             row = connection.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
             if not row:
                 raise ReviewError("SUGGESTION_NOT_FOUND", "未找到指定建议", 404)
-            _check_pending(row)
+            if row["status"] == "accepted":
+                _rollback_acceptance(connection, row, requeue_dependencies=False)
+            else:
+                _check_pending(row)
             proposed = json.loads(row["proposed_change"])
             if row["operation"] in {"resolveConceptMatch", "resolveMethodMatch"}:
                 owner_type = "concept" if row["operation"] == "resolveConceptMatch" else "method"
@@ -778,7 +1294,7 @@ def reject_suggestion(database_path: Path, suggestion_id: str, payload: dict) ->
             connection.execute(
                 """
                 UPDATE suggestions
-                SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP,
+                SET status = 'rejected', execution_result = NULL, reviewed_at = CURRENT_TIMESTAMP,
                     superseded_at = NULL, review_comment = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
@@ -787,5 +1303,109 @@ def reject_suggestion(database_path: Path, suggestion_id: str, payload: dict) ->
             _refresh_paper(connection, row["paper_id"])
             updated = connection.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
         return _suggestion(connection, updated)
+    finally:
+        connection.close()
+
+
+def apply_unreviewed_citations(database_path: Path) -> int:
+    """Apply pending paper citations directly and remove them from review.
+
+    Citation edges originate from the paper's bibliography/DOI match and are
+    treated as bibliographic facts rather than model suggestions.
+    """
+    connection = connect(database_path)
+    connection.row_factory = sqlite3.Row
+    applied = 0
+    try:
+        with connection:
+            rows = connection.execute(
+                "SELECT * FROM suggestions WHERE operation = 'addRelation' AND status = 'pending'"
+            ).fetchall()
+            affected_papers: set[str] = set()
+            for row in rows:
+                proposed = json.loads(row["proposed_change"])
+                if proposed.get("type") != "addRelation" or proposed.get("relationType") != "cites":
+                    continue
+                source_id = proposed["sourceId"]
+                target_id = proposed["targetId"]
+                if (
+                    source_id != target_id
+                    and _formal_node_type(connection, source_id) == "paper"
+                    and _formal_node_type(connection, target_id) == "paper"
+                ):
+                    _create_or_reuse_edge(
+                        connection,
+                        source_id,
+                        "paper",
+                        target_id,
+                        "paper",
+                        "cites",
+                        row["confidence"],
+                        _evidence_ids(connection, row["id"]),
+                        [row["paper_id"]],
+                    )
+                    applied += 1
+                connection.execute(
+                    """
+                    UPDATE relation_candidates
+                    SET status = 'discarded', suggestion_id = NULL, updated_at = CURRENT_TIMESTAMP
+                    WHERE suggestion_id = ?
+                    """,
+                    (row["id"],),
+                )
+                connection.execute("DELETE FROM suggestions WHERE id = ?", (row["id"],))
+                affected_papers.add(row["paper_id"])
+            for paper_id in affected_papers:
+                _refresh_paper(connection, paper_id)
+        return applied
+    finally:
+        connection.close()
+
+
+def reconcile_rejected_entity_relations(database_path: Path) -> int:
+    """Apply the cascade rule to entity decisions made before this release."""
+    connection = connect(database_path)
+    connection.row_factory = sqlite3.Row
+    cascaded_before = 0
+    try:
+        with connection:
+            cascaded_before = connection.execute(
+                """
+                SELECT COUNT(*) FROM suggestions
+                WHERE operation = 'addRelation' AND status = 'rejected'
+                AND review_comment = '因关联概念或方法被拒绝，系统自动拒绝此关系。'
+                """
+            ).fetchone()[0]
+            rows = connection.execute(
+                """
+                SELECT * FROM suggestions
+                WHERE status = 'rejected'
+                  AND operation IN ('resolveConceptMatch', 'resolveMethodMatch')
+                """
+            ).fetchall()
+            for row in rows:
+                proposed = json.loads(row["proposed_change"])
+                owner_type = "concept" if row["operation"] == "resolveConceptMatch" else "method"
+                owner_id = proposed[
+                    "extractedConceptId" if owner_type == "concept" else "extractedMethodId"
+                ]
+                refs = [
+                    value["client_ref"]
+                    for value in connection.execute(
+                        "SELECT client_ref FROM resolution_candidates WHERE owner_type = ? AND owner_id = ?",
+                        (owner_type, owner_id),
+                    ).fetchall()
+                ]
+                _discard_relation_refs(
+                    connection, row["extraction_id"], "resolutionCandidateRef", refs
+                )
+            cascaded_after = connection.execute(
+                """
+                SELECT COUNT(*) FROM suggestions
+                WHERE operation = 'addRelation' AND status = 'rejected'
+                AND review_comment = '因关联概念或方法被拒绝，系统自动拒绝此关系。'
+                """
+            ).fetchone()[0]
+        return cascaded_after - cascaded_before
     finally:
         connection.close()

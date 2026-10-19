@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
-from typing import Any, Literal
+import re
+from typing import Any, Callable, Literal
 
 from .agent_prompts import concept, finding, method, research_question
 from .agent_prompts.common import GLOBAL_GUARDRAILS
@@ -18,6 +19,44 @@ ALLOWED_METHOD_TYPES = {
     "behavioralTask", "electrophysiology", "imaging", "intervention", "molecularCellular",
     "computationalModel", "statisticalAnalysis", "other",
 }
+METHOD_BATCH_CHUNKS = 8
+CONCEPT_BATCH_CHUNKS = 8
+MAX_CONCEPTS_PER_PAPER = 6
+MAX_METHODS_PER_PAPER = 6
+
+_STRONG_CONCEPT_CUE = re.compile(
+    r"\b(?:we\s+(?:define|call|introduce|propose)|is\s+defined\s+as|"
+    r"referred\s+to\s+as|denoted\s+as|conceptualized\s+as)\b",
+    re.IGNORECASE,
+)
+_CONCEPT_CUE = re.compile(
+    r"\b(?:concept|construct|mechanism|phenomenon|theory|framework|state|representation)\b",
+    re.IGNORECASE,
+)
+_METHOD_USE_CUE = re.compile(
+    r"\b(?:we\s+(?:use|used|apply|applied|fit|fitted|train|trained|evaluate|evaluated|"
+    r"measure|measured|record|recorded|estimate|estimated|implement|implemented)|"
+    r"using|was\s+(?:used|applied|fitted|trained|measured|recorded|estimated|implemented))\b",
+    re.IGNORECASE,
+)
+_METHOD_SECTION_TOKENS = (
+    "method", "material", "procedure", "experiment", "data generation",
+    "implementation", "training", "evaluation setup", "study design", "apparatus",
+)
+_METHOD_LOW_SIGNAL_SECTION_TOKENS = (
+    "result", "discussion", "conclusion", "impact", "limitation", "other task",
+    "parameter setting", "quality assurance", "quality control",
+)
+_GENERIC_ENTITY_KEYS = {
+    "analysis", "approach", "data", "dataset", "experiment", "group", "method", "model",
+    "result", "task", "process", "procedure", "pipeline", "sample", "system", "user",
+    "分析", "方法", "模型", "结果", "任务", "流程", "过程", "群体", "样本", "系统", "用户",
+}
+
+
+def _is_method_section_name(section: str) -> bool:
+    folded = section.casefold()
+    return any(token in folded for token in _METHOD_SECTION_TOKENS)
 
 
 @dataclass(frozen=True)
@@ -65,6 +104,11 @@ class PaperDocument:
         value = self.metadata.get("abstract")
         return value if isinstance(value, str) and value.strip() else None
 
+    @property
+    def keywords(self) -> list[str]:
+        value = self.metadata.get("keywords")
+        return list(value) if isinstance(value, list) and all(isinstance(keyword, str) for keyword in value) else []
+
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> "PaperDocument":
         paper_id = value.get("paper_id", value.get("paperId"))
@@ -100,6 +144,7 @@ class PaperDocument:
             "year": self.year,
             "doi": self.doi,
             "abstract": self.abstract,
+            "keywords": self.keywords,
             "sections": [section.to_dict() for section in self.sections],
             "chunks": [
                 {
@@ -235,11 +280,21 @@ _AGENTS = (
 
 
 class SinglePaperExtractor:
-    def __init__(self, mode: ExtractionMode, client: ModelClient | None = None) -> None:
+    def __init__(
+        self,
+        mode: ExtractionMode,
+        client: ModelClient | None = None,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> None:
         if mode == "live" and client is None:
             raise ValueError("live mode requires a model client")
         self._mode = mode
         self._client = client
+        self._progress = progress
+
+    def _report(self, value: int, stage: str) -> None:
+        if self._progress is not None:
+            self._progress(value, stage)
 
     def extract(self, document: PaperDocument) -> StructuredPaperExtraction:
         if not document.chunks:
@@ -247,10 +302,19 @@ class SinglePaperExtractor:
         grouped: dict[str, list[ExtractedItem]] = {agent.name: [] for agent in _AGENTS}
         errors: dict[str, str] = {}
         for agent in _AGENTS:
-            chunks = self._select_chunks(document.chunks, agent.preferred_sections)
             try:
-                raw = self._mock_response(agent, chunks) if self._mode == "mock" else self._live_response(agent, document, chunks)
-                grouped[agent.name] = self._validate_items(agent, raw, document, chunks)
+                if agent.name == "methods":
+                    grouped[agent.name] = self._extract_methods(agent, document)
+                elif agent.name == "concepts":
+                    grouped[agent.name] = self._extract_concepts(agent, document)
+                else:
+                    chunks = self._select_chunks(document.chunks, agent.preferred_sections)
+                    raw = self._mock_response(agent, chunks) if self._mode == "mock" else self._live_response(agent, document, chunks)
+                    grouped[agent.name] = self._validate_items(agent, raw, document, chunks)
+                    if agent.name == "research_questions":
+                        self._report(57, "提取研究问题")
+                    elif agent.name == "findings":
+                        self._report(71, "提取主要发现")
             except (ModelCallError, ValueError, json.JSONDecodeError) as error:
                 errors[agent.name] = str(error)
         return StructuredPaperExtraction(document.paper_id, grouped["research_questions"], grouped["concepts"], grouped["methods"], grouped["findings"], errors)
@@ -258,7 +322,571 @@ class SinglePaperExtractor:
     @staticmethod
     def _select_chunks(chunks: list[PaperChunk], preferred_sections: tuple[str, ...]) -> list[PaperChunk]:
         preferred = [chunk for chunk in chunks if any(token in chunk.section.lower() for token in preferred_sections)]
-        return (preferred or chunks)[:8]
+        # Research-question and finding agents retain their bounded legacy context.
+        # Concept and method extraction use full batched paths below.
+        return (preferred or chunks)[:14]
+
+    def _extract_concepts(self, agent: _AgentDefinition, document: PaperDocument) -> list[ExtractedItem]:
+        chunks = self._concept_ranked_chunks(document)
+        extracted = self._extract_concept_batches(agent, document, chunks)
+        deduplicated = self._deduplicate_concepts(extracted)
+        self._report(64, "统一复核核心概念")
+        refined = self._refine_concept_boundaries(deduplicated, document)
+        # The global adjudicator deliberately assigns the same normalizedName
+        # to aliases such as an acronym and its expanded form.  The final pass
+        # must therefore merge on that reviewed name rather than the original
+        # English surface form used by the pre-review pass.
+        final = self._deduplicate_concepts(refined, prefer_normalized=True)
+        return self._select_core_entities(final, document, MAX_CONCEPTS_PER_PAPER)
+
+    def _extract_concept_batches(
+        self, agent: _AgentDefinition, document: PaperDocument, chunks: list[PaperChunk],
+    ) -> list[ExtractedItem]:
+        results: list[ExtractedItem] = []
+        errors: list[Exception] = []
+        total_batches = max(1, (len(chunks) + CONCEPT_BATCH_CHUNKS - 1) // CONCEPT_BATCH_CHUNKS)
+        for batch_index, start in enumerate(range(0, len(chunks), CONCEPT_BATCH_CHUNKS), start=1):
+            batch = chunks[start:start + CONCEPT_BATCH_CHUNKS]
+            if not batch:
+                continue
+            try:
+                raw = self._mock_response(agent, batch) if self._mode == "mock" else self._live_response(agent, document, batch)
+                results.extend(self._validate_items(agent, raw, document, batch))
+            except (ModelCallError, ValueError, json.JSONDecodeError) as error:
+                errors.append(error)
+            self._report(58 + round(5 * batch_index / total_batches), f"提取核心概念 {batch_index}/{total_batches}")
+        if not results and errors and len(errors) * CONCEPT_BATCH_CHUNKS >= len(chunks):
+            raise ValueError(f"all concept extraction batches failed: {errors[-1]}")
+        return results
+
+    def _concept_ranked_chunks(self, document: PaperDocument) -> list[PaperChunk]:
+        chunks = [chunk for chunk in document.chunks if "reference" not in chunk.section.casefold()]
+        terms = self._concept_navigation_terms(document)
+        self._report(58, "摘要与关键词导航")
+
+        def score(chunk: PaperChunk) -> tuple[int, int]:
+            text = chunk.chunk_text.casefold()
+            term_hits = sum(1 for term in terms if term.casefold() in text)
+            section = chunk.section.casefold()
+            value = term_hits * 2
+            if "abstract" in section:
+                value += 8
+            elif any(token in section for token in ("introduction", "discussion", "conclusion", "result", "finding")):
+                value += 1
+            if _STRONG_CONCEPT_CUE.search(chunk.chunk_text):
+                value += 6
+            elif _CONCEPT_CUE.search(chunk.chunk_text):
+                value += 3
+            return value, -document.chunks.index(chunk)
+
+        # Full-text coverage happens locally: every non-reference chunk is
+        # scored, but only definition/keyword/central-section hits are sent to
+        # the model. There is no fixed prefix or document-level item cap.
+        ranked = sorted(chunks, key=score, reverse=True)
+        selected = [chunk for chunk in ranked if score(chunk)[0] >= 5]
+        if selected:
+            return selected
+        abstract = [chunk for chunk in ranked if "abstract" in chunk.section.casefold()]
+        if abstract:
+            return abstract
+        best = score(ranked[0])[0] if ranked else 0
+        return [chunk for chunk in ranked if score(chunk)[0] == best]
+
+    def _concept_navigation_terms(self, document: PaperDocument) -> list[str]:
+        deterministic = list(dict.fromkeys(keyword.strip() for keyword in document.keywords if keyword.strip()))
+        if self._mode == "mock" or self._client is None:
+            return deterministic
+        section_titles = list(dict.fromkeys(chunk.section for chunk in document.chunks))
+        prompt = (
+            concept.NAVIGATION_INSTRUCTION
+            + "\n\n输出严格 JSON：{\"terms\":[\"English concept search term\"]}。"
+            + "\n【标题】\n" + (document.title or "")
+            + "\n【Abstract】\n" + (document.abstract or "")
+            + "\n【原文 Keywords】\n" + json.dumps(document.keywords, ensure_ascii=False)
+            + "\n【章节标题】\n" + json.dumps(section_titles, ensure_ascii=False)
+        )
+        try:
+            parsed = json.loads(self._client.generate("Return valid JSON only.", prompt))
+            values = parsed.get("terms") if isinstance(parsed, dict) else None
+            if isinstance(values, list):
+                model_terms = [value.strip() for value in values if isinstance(value, str) and value.strip()]
+                return list(dict.fromkeys([*deterministic, *model_terms]))
+        except (ModelCallError, ValueError, json.JSONDecodeError):
+            pass
+        return deterministic
+
+    def _refine_concept_boundaries(
+        self,
+        items: list[ExtractedItem],
+        document: PaperDocument | None = None,
+    ) -> list[ExtractedItem]:
+        if self._mode == "mock" or self._client is None or not items:
+            return items
+        candidates = self._filter_concept_candidates(items, document) if document else items
+        if not candidates:
+            return []
+        payload = [self._adjudication_payload(index, item, document) for index, item in enumerate(candidates)]
+        prompt = (
+            concept.BOUNDARY_INSTRUCTION
+            + "\n这是全篇候选的统一准入裁决；相同概念必须使用同一个 normalizedName。"
+            + "\n输出严格 JSON：{\"items\":[{\"candidateIndex\":0,\"keep\":true,"
+            "\"sourceTerm\":\"...\",\"displayName\":\"...\",\"normalizedName\":\"...\"}]}。"
+            + "\n必须为每个 candidateIndex 返回一次决定。\n【全篇候选】\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+        try:
+            parsed = json.loads(self._client.generate("Return valid JSON only.", prompt))
+            decisions = parsed.get("items") if isinstance(parsed, dict) else None
+            if not isinstance(decisions, list):
+                raise ValueError("boundary response requires items")
+            by_index = {
+                value["candidateIndex"]: value for value in decisions
+                if isinstance(value, dict) and isinstance(value.get("candidateIndex"), int)
+            }
+            if set(by_index) != set(range(len(candidates))):
+                raise ValueError("boundary response must decide every candidate")
+            refined = [
+                self._apply_boundary_decision(item, by_index[index])
+                for index, item in enumerate(candidates)
+                if by_index[index].get("keep") is not False
+            ]
+            if refined:
+                return refined
+            return self._recheck_zero_concept_result(candidates, document)
+        except (ModelCallError, ValueError, json.JSONDecodeError):
+            return candidates
+
+    def _recheck_zero_concept_result(
+        self,
+        candidates: list[ExtractedItem],
+        document: PaperDocument | None,
+    ) -> list[ExtractedItem]:
+        assert self._client is not None
+        payload = [
+            self._adjudication_payload(index, item, document)
+            for index, item in enumerate(candidates)
+        ]
+        prompt = (
+            concept.ZERO_RESULT_RECHECK_INSTRUCTION
+            + "\n输出严格 JSON：{\"items\":[{\"candidateIndex\":0,\"keep\":true,"
+            "\"sourceTerm\":\"...\",\"displayName\":\"...\",\"normalizedName\":\"...\"}]}。"
+            + "\n必须为每个 candidateIndex 返回一次决定。\n【全篇候选】\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+        try:
+            parsed = json.loads(self._client.generate("Return valid JSON only.", prompt))
+            decisions = parsed.get("items") if isinstance(parsed, dict) else None
+            if not isinstance(decisions, list):
+                raise ValueError("zero-result recheck requires items")
+            by_index = {
+                value["candidateIndex"]: value for value in decisions
+                if isinstance(value, dict) and isinstance(value.get("candidateIndex"), int)
+            }
+            if set(by_index) != set(range(len(candidates))):
+                raise ValueError("zero-result recheck must decide every candidate")
+            kept = [
+                self._apply_boundary_decision(item, by_index[index])
+                for index, item in enumerate(candidates)
+                if by_index[index].get("keep") is not False
+            ]
+            return kept[:3]
+        except (ModelCallError, ValueError, json.JSONDecodeError):
+            return []
+
+    @staticmethod
+    def _adjudication_payload(
+        index: int,
+        item: ExtractedItem,
+        document: PaperDocument | None,
+    ) -> dict[str, object]:
+        term = (item.source_term or item.display or item.normalized or "").strip()
+        occurrences = 0
+        sections: list[str] = []
+        if document and term:
+            folded = term.casefold()
+            for chunk in document.chunks:
+                if folded in chunk.chunk_text.casefold():
+                    occurrences += chunk.chunk_text.casefold().count(folded)
+                    if chunk.section not in sections:
+                        sections.append(chunk.section)
+        return {
+            "candidateIndex": index,
+            "sourceTerm": item.source_term,
+            "displayName": item.display,
+            "normalizedName": item.normalized,
+            "occurrences": occurrences,
+            "sections": sections,
+            "evidence": [{"section": value.section, "text": value.text} for value in item.evidence],
+        }
+
+    @staticmethod
+    def _entity_key(item: ExtractedItem) -> str:
+        label = item.source_term or item.normalized or item.display or ""
+        key = re.sub(r"[\W_]+", "", label.casefold(), flags=re.UNICODE)
+        if key.endswith("s") and len(key) > 4:
+            key = key[:-1]
+        return key
+
+    @staticmethod
+    def _normalized_entity_key(item: ExtractedItem) -> str:
+        label = item.normalized or item.display or item.source_term or ""
+        key = re.sub(r"[\W_]+", "", label.casefold(), flags=re.UNICODE)
+        if key.endswith("s") and len(key) > 4:
+            key = key[:-1]
+        return key
+
+    @staticmethod
+    def _is_featured(term: str, document: PaperDocument) -> bool:
+        folded = term.casefold()
+        sources = [document.title or "", document.abstract or "", *document.keywords]
+        return any(folded in source.casefold() for source in sources)
+
+    @staticmethod
+    def _term_document_stats(term: str, document: PaperDocument) -> tuple[int, int]:
+        folded = term.casefold()
+        occurrences = 0
+        sections: set[str] = set()
+        for chunk in document.chunks:
+            if "reference" in chunk.section.casefold():
+                continue
+            count = chunk.chunk_text.casefold().count(folded)
+            if count:
+                occurrences += count
+                sections.add(chunk.section.casefold())
+        return occurrences, len(sections)
+
+    @classmethod
+    def _filter_concept_candidates(
+        cls,
+        items: list[ExtractedItem],
+        document: PaperDocument,
+    ) -> list[ExtractedItem]:
+        retained: list[ExtractedItem] = []
+        for item in items:
+            term = (item.source_term or item.display or item.normalized or "").strip()
+            if not term:
+                continue
+            key = re.sub(r"[\W_]+", "", term.casefold(), flags=re.UNICODE)
+            if key in _GENERIC_ENTITY_KEYS or re.fullmatch(r"(?:axiom|figure|table|task)\d+", key):
+                continue
+            occurrences, section_count = cls._term_document_stats(term, document)
+            explicit = any(_STRONG_CONCEPT_CUE.search(value.text) for value in item.evidence)
+            if cls._is_featured(term, document) or explicit or (occurrences >= 2 and section_count >= 2):
+                retained.append(item)
+        return retained
+
+    @classmethod
+    def _filter_method_candidates(
+        cls,
+        items: list[ExtractedItem],
+        document: PaperDocument,
+    ) -> list[ExtractedItem]:
+        retained: list[ExtractedItem] = []
+        for item in items:
+            term = (item.source_term or item.display or item.normalized or "").strip()
+            if not term:
+                continue
+            key = re.sub(r"[\W_]+", "", term.casefold(), flags=re.UNICODE)
+            if key in _GENERIC_ENTITY_KEYS:
+                continue
+            occurrences, section_count = cls._term_document_stats(term, document)
+            method_section = any(
+                _is_method_section_name(value.section)
+                for value in item.evidence
+            )
+            explicit_use = any(_METHOD_USE_CUE.search(value.text) for value in item.evidence)
+            if cls._is_featured(term, document) or explicit_use or method_section or (occurrences >= 2 and section_count >= 2):
+                retained.append(item)
+        return retained
+
+    @classmethod
+    def _select_core_entities(
+        cls,
+        items: list[ExtractedItem],
+        document: PaperDocument,
+        limit: int,
+    ) -> list[ExtractedItem]:
+        """Rank globally adjudicated entities, then keep the paper's core set.
+
+        Full-text retrieval, batched extraction, boundary review and global
+        deduplication all happen before this final cap.  The cap therefore
+        never means "first six chunks" or "first six model outputs".
+        """
+        if len(items) <= limit:
+            return items
+
+        def score(indexed: tuple[int, ExtractedItem]) -> tuple[int, int, int, float, int, int]:
+            index, item = indexed
+            term = (item.source_term or item.display or item.normalized or "").strip()
+            occurrences, section_count = cls._term_document_stats(term, document)
+            return (
+                int(cls._is_featured(term, document)),
+                section_count,
+                occurrences,
+                item.confidence or 0,
+                len({value.id for value in item.evidence}),
+                -index,
+            )
+
+        ranked = sorted(enumerate(items), key=score, reverse=True)
+        return [item for _, item in ranked[:limit]]
+
+    @staticmethod
+    def _deduplicate_concepts(
+        items: list[ExtractedItem],
+        prefer_normalized: bool = False,
+    ) -> list[ExtractedItem]:
+        grouped: dict[str, list[ExtractedItem]] = {}
+        order: list[str] = []
+        for item in items:
+            key = (
+                SinglePaperExtractor._normalized_entity_key(item)
+                if prefer_normalized else SinglePaperExtractor._entity_key(item)
+            )
+            if not key:
+                continue
+            if key not in grouped:
+                grouped[key] = []
+                order.append(key)
+            grouped[key].append(item)
+        merged: list[ExtractedItem] = []
+        for key in order:
+            values = grouped[key]
+            representative = max(values, key=lambda value: (value.confidence or 0, len(value.source_term or "")))
+            evidence = []
+            seen_evidence: set[str] = set()
+            for value in values:
+                for entry in value.evidence:
+                    if entry.id not in seen_evidence:
+                        seen_evidence.add(entry.id)
+                        evidence.append(entry)
+            merged.append(ExtractedItem(
+                source_term=max((value.source_term for value in values if value.source_term), key=len, default=representative.source_term),
+                text=representative.text,
+                display=representative.display,
+                normalized=representative.normalized,
+                method_type=None,
+                reason=representative.reason,
+                confidence=max((value.confidence for value in values if value.confidence is not None), default=None),
+                evidence_ids=[entry.id for entry in evidence],
+                evidence=evidence,
+            ))
+        return merged
+
+    def _extract_methods(self, agent: _AgentDefinition, document: PaperDocument) -> list[ExtractedItem]:
+        terms = self._method_navigation_terms(document)
+        self._report(65, "定位方法证据")
+        method_chunks = self._method_retrieval_chunks(document, terms, prefer_method_sections=True)
+        extracted = self._extract_method_batches(agent, document, method_chunks) if method_chunks else []
+
+        # Only fall back after the complete Methods/Materials route has produced
+        # no valid method. Abstract/Keywords provide navigation terms, while all
+        # non-reference chunks remain reachable in batches (no fixed document cap).
+        if not extracted:
+            fallback_chunks = self._method_retrieval_chunks(document, terms, prefer_method_sections=False)
+            extracted = self._extract_method_batches(agent, document, fallback_chunks)
+
+        deduplicated = self._deduplicate_methods(extracted)
+        self._report(70, "统一复核研究方法")
+        refined = self._refine_method_boundaries(deduplicated, document)
+        final = self._deduplicate_methods(refined, prefer_normalized=True)
+        return self._select_core_entities(final, document, MAX_METHODS_PER_PAPER)
+
+    def _extract_method_batches(
+        self, agent: _AgentDefinition, document: PaperDocument, chunks: list[PaperChunk],
+    ) -> list[ExtractedItem]:
+        results: list[ExtractedItem] = []
+        errors: list[Exception] = []
+        total_batches = max(1, (len(chunks) + METHOD_BATCH_CHUNKS - 1) // METHOD_BATCH_CHUNKS)
+        for batch_index, start in enumerate(range(0, len(chunks), METHOD_BATCH_CHUNKS), start=1):
+            batch = chunks[start:start + METHOD_BATCH_CHUNKS]
+            if not batch:
+                continue
+            try:
+                raw = self._mock_response(agent, batch) if self._mode == "mock" else self._live_response(agent, document, batch)
+                results.extend(self._validate_items(agent, raw, document, batch))
+            except (ModelCallError, ValueError, json.JSONDecodeError) as error:
+                errors.append(error)
+            self._report(65 + round(4 * batch_index / total_batches), f"提取研究方法 {batch_index}/{total_batches}")
+        if not results and errors and len(errors) * METHOD_BATCH_CHUNKS >= len(chunks):
+            raise ValueError(f"all method extraction batches failed: {errors[-1]}")
+        return results
+
+    def _method_retrieval_chunks(
+        self,
+        document: PaperDocument,
+        terms: list[str],
+        prefer_method_sections: bool,
+    ) -> list[PaperChunk]:
+        chunks = [chunk for chunk in document.chunks if "reference" not in chunk.section.casefold()]
+
+        # The first pass really is Methods-first when the paper exposes such a
+        # section.  Abstract/full-text retrieval is reserved for the explicit
+        # fallback pass, so a strong abstract sentence cannot silently bypass
+        # an available Methods section.
+        if prefer_method_sections:
+            method_chunks = [
+                chunk for chunk in chunks
+                if _is_method_section_name(chunk.section)
+            ]
+            if method_chunks:
+                chunks = method_chunks
+
+        def score(chunk: PaperChunk) -> tuple[int, int]:
+            text = chunk.chunk_text.casefold()
+            term_hits = sum(1 for term in terms if term.casefold() in text)
+            section = chunk.section.casefold()
+            in_method = _is_method_section_name(section)
+            # A Methods heading is a routing signal, not sufficient by itself:
+            # long sections often contain controls, parameters and incidental
+            # prose.  A navigation-term hit or an explicit use verb promotes
+            # the chunk to model context.
+            value = term_hits * 2 + (3 if in_method else 0)
+            if _METHOD_USE_CUE.search(chunk.chunk_text):
+                value += 5
+            if "abstract" in section:
+                value += 1
+            if any(token in section for token in _METHOD_LOW_SIGNAL_SECTION_TOKENS):
+                value -= 4
+            return value, -document.chunks.index(chunk)
+
+        ranked = sorted(chunks, key=score, reverse=True)
+        selected = [chunk for chunk in ranked if score(chunk)[0] >= 5]
+        if selected:
+            return selected
+        abstract = [chunk for chunk in ranked if "abstract" in chunk.section.casefold()]
+        if abstract:
+            return abstract
+        best = score(ranked[0])[0] if ranked else 0
+        return [chunk for chunk in ranked if score(chunk)[0] == best]
+
+    def _method_navigation_terms(self, document: PaperDocument) -> list[str]:
+        deterministic = list(dict.fromkeys(keyword.strip() for keyword in document.keywords if keyword.strip()))
+        if self._mode == "mock" or self._client is None:
+            return deterministic
+        section_titles = list(dict.fromkeys(chunk.section for chunk in document.chunks))
+        prompt = (
+            method.NAVIGATION_INSTRUCTION
+            + "\n\n输出严格 JSON：{\"terms\":[\"English search term\"]}。"
+            + "\n【标题】\n" + (document.title or "")
+            + "\n【Abstract】\n" + (document.abstract or "")
+            + "\n【原文 Keywords】\n" + json.dumps(document.keywords, ensure_ascii=False)
+            + "\n【章节标题】\n" + json.dumps(section_titles, ensure_ascii=False)
+        )
+        try:
+            parsed = json.loads(self._client.generate("Return valid JSON only.", prompt))
+            values = parsed.get("terms") if isinstance(parsed, dict) else None
+            if isinstance(values, list):
+                model_terms = [value.strip() for value in values if isinstance(value, str) and value.strip()]
+                return list(dict.fromkeys([*deterministic, *model_terms]))
+        except (ModelCallError, ValueError, json.JSONDecodeError):
+            pass
+        return deterministic
+
+    def _refine_method_boundaries(
+        self,
+        items: list[ExtractedItem],
+        document: PaperDocument | None = None,
+    ) -> list[ExtractedItem]:
+        if self._mode == "mock" or self._client is None or not items:
+            return items
+        candidates = self._filter_method_candidates(items, document) if document else items
+        if not candidates:
+            return []
+        payload = [
+            {**self._adjudication_payload(index, item, document), "methodType": item.method_type}
+            for index, item in enumerate(candidates)
+        ]
+        prompt = (
+            method.BOUNDARY_INSTRUCTION
+            + "\n这是全篇候选的统一准入裁决；相同方法及其任务变体应合并到合适粒度。"
+            + "\n输出严格 JSON：{\"items\":[{\"candidateIndex\":0,\"keep\":true,"
+            "\"sourceTerm\":\"...\",\"displayName\":\"...\",\"normalizedName\":\"...\"}]}。"
+            + "\n必须为每个 candidateIndex 返回一次决定。\n【全篇候选】\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+        try:
+            parsed = json.loads(self._client.generate("Return valid JSON only.", prompt))
+            decisions = parsed.get("items") if isinstance(parsed, dict) else None
+            if not isinstance(decisions, list):
+                raise ValueError("boundary response requires items")
+            by_index = {
+                value["candidateIndex"]: value for value in decisions
+                if isinstance(value, dict) and isinstance(value.get("candidateIndex"), int)
+            }
+            if set(by_index) != set(range(len(candidates))):
+                raise ValueError("boundary response must decide every candidate")
+            return [
+                self._apply_boundary_decision(item, by_index[index])
+                for index, item in enumerate(candidates)
+                if by_index[index].get("keep") is not False
+            ]
+        except (ModelCallError, ValueError, json.JSONDecodeError):
+            return candidates
+
+    @staticmethod
+    def _apply_boundary_decision(item: ExtractedItem, decision: dict[str, object] | None) -> ExtractedItem:
+        if not decision:
+            return item
+        evidence_text = "\n".join(value.text for value in item.evidence).casefold()
+        source = decision.get("sourceTerm")
+        if not isinstance(source, str) or not source.strip() or source.strip().casefold() not in evidence_text:
+            source = item.source_term
+        display = decision.get("displayName")
+        normalized = decision.get("normalizedName")
+        return ExtractedItem(
+            source_term=source.strip() if isinstance(source, str) else item.source_term,
+            text=item.text,
+            display=display.strip() if isinstance(display, str) and display.strip() else item.display,
+            normalized=normalized.strip() if isinstance(normalized, str) and normalized.strip() else item.normalized,
+            method_type=item.method_type,
+            reason=item.reason,
+            confidence=item.confidence,
+            evidence_ids=item.evidence_ids,
+            evidence=item.evidence,
+        )
+
+    @staticmethod
+    def _deduplicate_methods(
+        items: list[ExtractedItem],
+        prefer_normalized: bool = False,
+    ) -> list[ExtractedItem]:
+        grouped: dict[str, list[ExtractedItem]] = {}
+        order: list[str] = []
+        for item in items:
+            key = (
+                SinglePaperExtractor._normalized_entity_key(item)
+                if prefer_normalized else SinglePaperExtractor._entity_key(item)
+            )
+            if not key:
+                continue
+            if key not in grouped:
+                grouped[key] = []
+                order.append(key)
+            grouped[key].append(item)
+        merged: list[ExtractedItem] = []
+        for key in order:
+            values = grouped[key]
+            representative = max(values, key=lambda value: (value.confidence or 0, len(value.source_term or "")))
+            evidence = []
+            seen_evidence: set[str] = set()
+            for value in values:
+                for entry in value.evidence:
+                    if entry.id not in seen_evidence:
+                        seen_evidence.add(entry.id)
+                        evidence.append(entry)
+            merged.append(ExtractedItem(
+                source_term=max((value.source_term for value in values if value.source_term), key=len, default=representative.source_term),
+                text=representative.text,
+                display=representative.display,
+                normalized=representative.normalized,
+                method_type=representative.method_type,
+                reason=representative.reason,
+                confidence=max((value.confidence for value in values if value.confidence is not None), default=None),
+                evidence_ids=[entry.id for entry in evidence],
+                evidence=evidence,
+            ))
+        return merged
 
     def _live_response(self, agent: _AgentDefinition, document: PaperDocument, chunks: list[PaperChunk]) -> dict[str, object]:
         assert self._client is not None
@@ -331,37 +959,44 @@ class SinglePaperExtractor:
 
     @staticmethod
     def _validate_item_shape(agent_name: str, item: dict[str, object]) -> dict[str, Any]:
-        required: dict[str, set[str]] = {
-            "research_questions": {"text", "sourceTerm", "reason", "confidence", "evidenceRefs"},
-            "concepts": {"sourceTerm", "displayName", "normalizedName", "description", "reason", "confidence", "evidenceRefs"},
-            "methods": {"sourceTerm", "displayName", "normalizedName", "methodType", "description", "reason", "confidence", "evidenceRefs"},
-            "findings": {"text", "sourceTerm", "reason", "confidence", "evidenceRefs"},
-        }
-        if set(item) != required[agent_name]:
-            raise ValueError(f"{agent_name} returned unsupported or missing fields")
-        for key in ("reason",):
-            if not isinstance(item[key], str) or not item[key].strip():
-                raise ValueError(f"{agent_name}.{key} must be a non-empty string")
+        # Models occasionally omit descriptive fields or return ``statement``
+        # (the documented finding field) instead of the old internal ``text``.
+        # Normalize harmless variations rather than discarding evidence-backed
+        # content wholesale; semantic fields and evidence remain mandatory.
+        normalized: dict[str, Any] = dict(item)
+        if agent_name == "findings":
+            normalized["text"] = normalized.get("text", normalized.get("statement"))
+            normalized["sourceTerm"] = normalized.get("sourceTerm", normalized.get("text"))
+        if agent_name in {"concepts", "methods"}:
+            normalized.setdefault("description", None)
+        normalized.setdefault("reason", "原文证据直接支持该项。")
+        normalized.setdefault("confidence", None)
         for key in ("sourceTerm", "text", "displayName", "normalizedName", "description"):
-            if key in item and item[key] is not None and not isinstance(item[key], str):
+            if key in normalized and normalized[key] is not None and not isinstance(normalized[key], str):
                 raise ValueError(f"{agent_name}.{key} must be a string or null")
+        if not isinstance(normalized["reason"], str) or not normalized["reason"].strip():
+            normalized["reason"] = "原文证据直接支持该项。"
         non_empty_by_agent = {
             "research_questions": ("text",),
-            "concepts": ("sourceTerm", "displayName"),
-            "methods": ("sourceTerm", "displayName"),
+            # The public extraction schema explicitly allows sourceTerm=null
+            # when the model cannot isolate a safe verbatim English label.  A
+            # translated displayName plus exact evidence is still usable and
+            # must not invalidate every otherwise valid item in the batch.
+            "concepts": ("displayName",),
+            "methods": ("displayName",),
             "findings": ("text",),
         }
         for key in non_empty_by_agent[agent_name]:
-            if not isinstance(item[key], str) or not item[key].strip():
+            if not isinstance(normalized.get(key), str) or not normalized[key].strip():
                 raise ValueError(f"{agent_name}.{key} must be a non-empty string")
-        confidence = item["confidence"]
+        confidence = normalized["confidence"]
         if confidence is not None and (not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= confidence <= 1):
             raise ValueError(f"{agent_name}.confidence must be null or between 0 and 1")
-        if not isinstance(item["evidenceRefs"], list) or not item["evidenceRefs"]:
+        if not isinstance(normalized.get("evidenceRefs"), list) or not normalized["evidenceRefs"]:
             raise ValueError(f"{agent_name}.evidenceRefs must be a non-empty array")
-        if agent_name == "methods" and item["methodType"] not in ALLOWED_METHOD_TYPES:
+        if agent_name == "methods" and normalized.get("methodType") not in ALLOWED_METHOD_TYPES:
             raise ValueError("methods.methodType is not allowed")
-        return item  # type: ignore[return-value]
+        return normalized
 
     @staticmethod
     def _resolve_evidence(refs: list[object], paper_id: str, chunk_map: dict[str, tuple[int, PaperChunk]]) -> list[Evidence] | None:

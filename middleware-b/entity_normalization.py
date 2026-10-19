@@ -8,10 +8,10 @@ import re
 import socket
 from typing import Literal, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from .agent_prompts.entity_match import INSTRUCTION, OUTPUT_TEMPLATE
-from .model_client import ModelClient
+from .model_client import ModelCallError, ModelClient
 
 EntityType = Literal["concept", "method"]
 MatchStatus = Literal["matched", "uncertain", "new"]
@@ -77,6 +77,9 @@ class ANodeMatchCandidateClient:
     def __init__(self, base_url: str, timeout_seconds: float = 10.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+        # Candidate lookup always targets backend A on the local machine.  Do
+        # not let a global HTTP_PROXY route 127.0.0.1 through an external proxy.
+        self._opener = build_opener(ProxyHandler({}))
 
     def query(self, entity_type: EntityType, raw_text: str, normalized_label: str, context: str | None, limit: int) -> list[MatchCandidate]:
         if not 1 <= limit <= 10:
@@ -86,7 +89,7 @@ class ANodeMatchCandidateClient:
         request = Request(f"{self._base_url}/api/v1/internal/node-match-candidates",
                           data=json.dumps(request_body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:
+            with self._opener.open(request, timeout=self._timeout_seconds) as response:
                 status, body = response.status, _decode_response(response.read())
         except HTTPError as error:
             status, body = error.code, _decode_response(error.read())
@@ -116,8 +119,110 @@ class EntityNormalizer:
         if not candidates:
             return NormalizedEntity(entity.source_term, entity.display_name, entity.entity_type, "new", [], entity.display_name,
                                     [], [], {}, None, "A 未返回可匹配的正式候选。", entity.evidence_client_refs)
+        exact = self._exact_match(entity, candidates)
+        if exact is not None:
+            return NormalizedEntity(
+                entity.source_term, entity.display_name, entity.entity_type, "matched", [exact.entity_id], None,
+                candidates, [], {}, None, "名称与现有正式节点完全一致。", entity.evidence_client_refs,
+            )
         decision = self._mock_decision(entity, candidates) if self._mode == "mock" else self._live_decision(entity, candidates)
         return _validate_decision(entity, candidates, decision)
+
+    def normalize_many(self, entities: list[RawEntity]) -> list[NormalizedEntity]:
+        """Resolve many entities with one model call after local exact matching.
+
+        Candidate lookup remains local and cached.  Items with no candidate or
+        an exact canonical-name match never consume a model request.  Remaining
+        ambiguous items share one adjudication call; malformed batch output is
+        safely returned as reviewable uncertain candidates.
+        """
+        results: list[NormalizedEntity | None] = [None] * len(entities)
+        unresolved: list[tuple[int, RawEntity, list[MatchCandidate]]] = []
+        for index, entity in enumerate(entities):
+            candidates = self._candidates_for(entity)
+            if not candidates:
+                results[index] = NormalizedEntity(
+                    entity.source_term, entity.display_name, entity.entity_type, "new", [], entity.display_name,
+                    [], [], {}, None, "A 未返回可匹配的正式候选。", entity.evidence_client_refs,
+                )
+                continue
+            exact = self._exact_match(entity, candidates)
+            if exact is not None:
+                results[index] = NormalizedEntity(
+                    entity.source_term, entity.display_name, entity.entity_type, "matched", [exact.entity_id], None,
+                    candidates, [], {}, None, "名称与现有正式节点完全一致。", entity.evidence_client_refs,
+                )
+                continue
+            unresolved.append((index, entity, candidates))
+
+        if unresolved and self._mode == "mock":
+            for index, entity, candidates in unresolved:
+                results[index] = _validate_decision(entity, candidates, self._mock_decision(entity, candidates))
+        elif unresolved:
+            try:
+                decisions = self._live_batch_decisions(unresolved)
+                for (index, entity, candidates), decision in zip(unresolved, decisions, strict=True):
+                    results[index] = _validate_decision(entity, candidates, decision)
+            except (ModelCallError, ValueError, json.JSONDecodeError, NormalizationError):
+                for index, entity, candidates in unresolved:
+                    selected = [candidate.entity_id for candidate in candidates]
+                    scores = {
+                        candidate.entity_id: candidate.recommendation_score
+                        for candidate in candidates
+                    }
+                    results[index] = NormalizedEntity(
+                        entity.source_term, entity.display_name, entity.entity_type, "uncertain", [], None,
+                        candidates, selected, scores, None,
+                        "批量语义匹配未完成，保留现有候选供审核。", entity.evidence_client_refs,
+                    )
+        return [result for result in results if result is not None]
+
+    @staticmethod
+    def _exact_match(entity: RawEntity, candidates: list[MatchCandidate]) -> MatchCandidate | None:
+        expected = _cache_term(entity.display_name or entity.source_term)
+        return next(
+            (candidate for candidate in candidates if _cache_term(candidate.canonical_name) == expected),
+            None,
+        )
+
+    def _live_batch_decisions(
+        self,
+        unresolved: list[tuple[int, RawEntity, list[MatchCandidate]]],
+    ) -> list[dict[str, object]]:
+        assert self._model_client is not None
+        payload = [
+            {
+                "candidateIndex": position,
+                "entityType": entity.entity_type,
+                "sourceTerm": entity.source_term,
+                "displayName": entity.display_name,
+                "context": entity.context or "",
+                "existingCandidates": [candidate.to_v05_context() for candidate in candidates],
+            }
+            for position, (_, entity, candidates) in enumerate(unresolved)
+        ]
+        prompt = (
+            INSTRUCTION
+            + "\n请一次判断下列全部实体。每个 candidateIndex 必须返回一个决定，决定字段严格使用模板字段。"
+            + "\n输出 JSON：{\"items\":[{\"candidateIndex\":0,...模板字段}]}。"
+            + "\n【决定模板】\n" + json.dumps(OUTPUT_TEMPLATE, ensure_ascii=False)
+            + "\n【待判断实体】\n" + json.dumps(payload, ensure_ascii=False)
+        )
+        parsed = json.loads(self._model_client.generate("Return valid JSON only.", prompt))
+        values = parsed.get("items") if isinstance(parsed, dict) else None
+        if not isinstance(values, list):
+            raise ValueError("batch match response requires items")
+        by_index: dict[int, dict[str, object]] = {}
+        for value in values:
+            if not isinstance(value, dict) or not isinstance(value.get("candidateIndex"), int):
+                continue
+            candidate_index = value["candidateIndex"]
+            decision = dict(value)
+            decision.pop("candidateIndex", None)
+            by_index[candidate_index] = _parse_decision(json.dumps(decision, ensure_ascii=False))
+        if set(by_index) != set(range(len(unresolved))):
+            raise ValueError("batch match response must decide every entity")
+        return [by_index[index] for index in range(len(unresolved))]
 
     def _candidates_for(self, entity: RawEntity) -> list[MatchCandidate]:
         key = (entity.entity_type, _cache_term(entity.display_name or entity.source_term))

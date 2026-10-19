@@ -13,6 +13,44 @@ dist-ssr
 preview-dist
 *.local
 
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local databases, imported papers, credentials and runtime state
+*.sqlite3
+*.sqlite3-*
+model-config.json
+model-config.bin
+.env
+!.env.example
+evaluation/
+evaluation-papers/
+
+# Generated desktop runtimes and packages
+desktop/node_modules/
+desktop/dist-mac/
+desktop/dist-mac-blank/
+desktop/dist-win/
+desktop/dist-win-blank/
+desktop/service-dist*/
+desktop/service_backend/
+desktop/service_backend-backup-*/
+desktop/seed-data/*.sqlite3
+*.dmg
+*.exe
+*.msi
+*.blockmap
+
+# Local delivery archives and scratch output
+deliverables/
+deliverables.zip
+.codex-finalizer/
+.codex-ppt-build/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

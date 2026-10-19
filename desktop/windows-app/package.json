@@ -1,0 +1,9 @@
+{
+  "name": "yanzhitu-desktop",
+  "private": true,
+  "version": "0.4.0",
+  "description": "研知图 Windows 空白数据版",
+  "author": "研知图",
+  "packageManager": "pnpm@11.19.0",
+  "main": "main.cjs"
+}

@@ -1,0 +1,170 @@
+.analysis-jobs-page {
+  max-width: 980px;
+  padding: 32px;
+  color: var(--color-text, #172033);
+}
+
+.analysis-jobs-page__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.analysis-jobs-page__header p {
+  margin: 0;
+  letter-spacing: 0.12em;
+  font-size: 12px;
+}
+
+.analysis-jobs-page__header h1 {
+  margin: 6px 0;
+}
+
+.analysis-jobs-page__rerun-all {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 9px 14px;
+  color: #fff;
+  background: #b64b35;
+  border: 1px solid #a13f2c;
+  border-radius: 9px;
+  box-shadow: 0 4px 12px rgb(182 75 53 / 18%);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
+.analysis-jobs-page__rerun-all:hover:not(:disabled) {
+  background: #a9422f;
+}
+
+.analysis-jobs-page__rerun-all:disabled {
+  color: var(--color-text-soft, #657087);
+  background: var(--color-surface-muted, #f3f6f9);
+  border-color: var(--color-border, #dfe5ee);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.analysis-jobs-page__error,
+.analysis-jobs-page__message {
+  padding: 10px 14px;
+  border-radius: 9px;
+}
+
+.analysis-jobs-page__error {
+  color: #9f2424;
+  background: #fff0f0;
+}
+
+.analysis-jobs-page__message {
+  color: #176244;
+  background: #eaf8f1;
+}
+
+.analysis-jobs-table {
+  display: grid;
+  gap: 12px;
+}
+
+.analysis-jobs-table article {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(120px, 0.5fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--color-border, #dfe5ee);
+  border-radius: 12px;
+  background: var(--color-surface, #fff);
+}
+
+.analysis-job-summary {
+  display: flex;
+  gap: 8px;
+  flex-direction: column;
+}
+
+.analysis-job-summary a {
+  color: var(--color-primary-deep, #244e88);
+  font-weight: 700;
+}
+
+.analysis-job-summary strong {
+  width: max-content;
+  color: var(--color-text-soft, #657087);
+  font-size: 0.82rem;
+}
+
+.analysis-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.analysis-job-action {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.analysis-job-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 失败/取消后的恢复操作使用高辨识度暖色。 */
+.analysis-job-action--retry {
+  color: #fff;
+  background: #b64b35;
+}
+
+/* 已完成任务的再次分析是主动选择，使用较平静的品牌色。 */
+.analysis-job-action--completed {
+  color: #fff;
+  background: var(--color-primary, #3972b8);
+}
+
+.analysis-job-action--replace {
+  color: #8f2525;
+  background: #fff4f2;
+  border-color: #d99087;
+}
+
+.analysis-job-action--cancel {
+  color: var(--color-text-soft, #657087);
+  background: var(--color-surface-muted, #f3f6f9);
+  border-color: var(--color-border, #dfe5ee);
+}
+
+.analysis-job-action--delete {
+  color: #9f2424;
+  background: transparent;
+  border-color: #dfaaaa;
+}
+
+@media (max-width: 820px) {
+  .analysis-jobs-page__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .analysis-jobs-table article {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-job-actions {
+    justify-content: flex-start;
+  }
+}

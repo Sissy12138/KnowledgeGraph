@@ -1,0 +1,41 @@
+{
+  "name": "yanzhitu-desktop",
+  "private": true,
+  "version": "0.4.0",
+  "description": "研知图科研知识图谱桌面应用，支持完整数据与空白数据打包",
+  "author": "研知图",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "package:mac": "electron-builder --mac dmg zip --arm64",
+    "package:mac:blank": "electron-builder --config electron-builder.blank.json --mac dmg zip --arm64",
+    "package:win:blank": "electron-builder --config electron-builder.win-blank.cjs --win dir --x64"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.yanzhitu.researchkg",
+    "productName": "研知图",
+    "asar": true,
+    "files": ["main.cjs", "package.json"],
+    "extraResources": [
+      { "from": "../frontend/dist", "to": "frontend" },
+      { "from": "service-dist/yanzhitu-service", "to": "service-runtime" },
+      { "from": "seed-data/yanzhitu-full.sqlite3", "to": "seed-data/yanzhitu-full.sqlite3" }
+    ],
+    "directories": { "output": "dist-mac", "buildResources": "build" },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.education",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "artifactName": "研知图-${version}-mac-${arch}-完整数据版.${ext}"
+    },
+    "dmg": {
+      "title": "研知图 ${version}",
+      "artifactName": "研知图-${version}-mac-${arch}-完整数据版.${ext}"
+    }
+  }
+}

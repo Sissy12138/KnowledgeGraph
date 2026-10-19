@@ -49,6 +49,7 @@ export interface SuggestionService {
   listAllSuggestions(): Promise<Suggestion[]>
   acceptSuggestion(id: string, input?: AcceptSuggestionInput): Promise<Suggestion>
   rejectSuggestion(id: string, reason?: string | null): Promise<Suggestion>
+  reopenSuggestion(id: string): Promise<Suggestion>
   reviewSuggestions(input: ReviewSuggestionsInput): Promise<BatchReviewResult>
   prime(page: SuggestionPageDto, latestExtractions: Record<string, ExtractionDto>): void
 }
@@ -215,6 +216,26 @@ export function createSuggestionService(
     }
   }
 
+  function mockReopen(suggestion: Suggestion): SuggestionDto {
+    const dto = pageDto.items.find((item) => item.id === suggestion.id)
+    if (!dto) throw apiError(404, 'SUGGESTION_NOT_FOUND', '建议不存在')
+    if (suggestion.status !== 'accepted') {
+      throw apiError(409, 'SUGGESTION_NOT_ACCEPTED', '只有已采纳建议可以重新加入待审核')
+    }
+    if (!suggestion.canReopen) {
+      throw apiError(409, 'SUGGESTION_REOPEN_STALE', '旧版分析建议不能重新加入当前待审核队列')
+    }
+    return {
+      ...structuredClone(dto),
+      status: 'pending',
+      executionResult: null,
+      reviewedAt: null,
+      supersededAt: null,
+      reviewComment: null,
+      updatedAt: '2026-08-29T10:35:00Z',
+    }
+  }
+
   function recordStatusChange(previous: SuggestionStatus, next: SuggestionStatus) {
     pageDto.statusCounts[previous] -= 1
     pageDto.statusCounts[next] += 1
@@ -276,7 +297,7 @@ export function createSuggestionService(
 
     async rejectSuggestion(id, reason = null) {
       const suggestion = findSuggestion(id)
-      assertReviewable(suggestion)
+      if (suggestion.status !== 'accepted') assertReviewable(suggestion)
       const request = buildRejectSuggestionRequest(reason)
       const updated = getDataMode() === 'api'
         ? await requestJson<SuggestionDto>(
@@ -284,6 +305,24 @@ export function createSuggestionService(
             postJsonInit(request),
           )
         : mockReject(suggestion, request)
+      recordStatusChange(suggestion.status, updated.status)
+      return updateDto(updated)
+    },
+
+    async reopenSuggestion(id) {
+      const suggestion = findSuggestion(id)
+      if (suggestion.status !== 'accepted') {
+        throw apiError(409, 'SUGGESTION_NOT_ACCEPTED', '只有已采纳建议可以重新加入待审核')
+      }
+      if (!suggestion.canReopen) {
+        throw apiError(409, 'SUGGESTION_REOPEN_STALE', '旧版分析建议不能重新加入当前待审核队列')
+      }
+      const updated = getDataMode() === 'api'
+        ? await requestJson<SuggestionDto>(
+            `/api/v1/suggestions/${encodeURIComponent(id)}/reopen`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+          )
+        : mockReopen(suggestion)
       recordStatusChange(suggestion.status, updated.status)
       return updateDto(updated)
     },

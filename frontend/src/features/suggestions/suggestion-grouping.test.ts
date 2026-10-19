@@ -22,7 +22,10 @@ describe('groupSuggestionsByPaper', () => {
   it('keeps first-seen paper order and a stable unknown-paper fallback', () => {
     const page = toSuggestionPageView(suggestionPageDtoMock, extractionDtoMocks)
     const unknown = { ...page.items[0], id: 'unknown', paperId: 'paper-unknown' }
-    const groups = groupSuggestionsByPaper([unknown, page.items[2], page.items[1]], page.papers)
+    const paper003 = page.items.find((item) => item.paperId === 'paper-003')
+    const paper001 = page.items.find((item) => item.paperId === 'paper-001')
+    if (!paper003 || !paper001) throw new Error('fixture missing')
+    const groups = groupSuggestionsByPaper([unknown, paper003, paper001], page.papers)
 
     expect(groups.map((group) => group.paperId)).toEqual(['paper-unknown', 'paper-003', 'paper-001'])
     expect(groups[0].paperTitle).toBe('未知论文（paper-unknown）')

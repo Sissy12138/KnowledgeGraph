@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 from urllib.parse import urlparse
 
-ProviderName = Literal["openai", "deepseek", "qwen"]
+ProviderName = str
 
 PROVIDER_DEFAULTS = {
-    "openai": {"baseUrl": "https://api.openai.com/v1", "model": "gpt-5.6-luna"},
+    "openai": {"baseUrl": "https://api.openai.com/v1", "model": "gpt-5-mini"},
+    "anthropic": {"baseUrl": "https://api.anthropic.com", "model": "claude-sonnet-4-5"},
+    "gemini": {"baseUrl": "https://generativelanguage.googleapis.com/v1beta", "model": "gemini-3.8-flash"},
     "deepseek": {"baseUrl": "https://api.deepseek.com", "model": "deepseek-v4-flash"},
-    "qwen": {"baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "model": "qwen-flash"},
+    "qwen": {"baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen3.8-max"},
+    "minimax": {"baseUrl": "https://api.minimax.io/v1", "model": "MiniMax-M2.7"},
+    "openrouter": {"baseUrl": "https://openrouter.ai/api/v1", "model": "openai/gpt-5-mini"},
+    "groq": {"baseUrl": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile"},
+    "mistral": {"baseUrl": "https://api.mistral.ai/v1", "model": "mistral-large-latest"},
+    "together": {"baseUrl": "https://api.together.xyz/v1", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+    "siliconflow": {"baseUrl": "https://api.siliconflow.cn/v1", "model": "deepseek-ai/DeepSeek-V3"},
 }
 
 

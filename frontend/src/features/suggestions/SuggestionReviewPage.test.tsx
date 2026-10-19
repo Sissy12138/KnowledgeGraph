@@ -114,6 +114,21 @@ describe('SuggestionReviewPage v05 behavior', () => {
     expect(within(paper).queryByText(/正确率/)).toBeNull()
   })
 
+  it('shows both endpoint labels and the semantic type for relation review', async () => {
+    const user = userEvent.setup()
+    renderPage(createMockSuggestionService(pageWithItems(['suggestion-004'], {
+      pending: 1, accepted: 0, rejected: 0, superseded: 0,
+    }), extractionDtoMocks))
+
+    const paper = await expandPaper(user, '反转学习中的认知灵活性与前额叶活动')
+    const relation = within(paper).getByRole('region', { name: '关系：反转学习 相关 认知灵活性' })
+
+    expect(within(relation).getByText('反转学习')).toBeVisible()
+    expect(within(relation).getByText('相关')).toBeVisible()
+    expect(within(relation).getByText('认知灵活性')).toBeVisible()
+    expect(within(relation).getAllByText('概念')).toHaveLength(2)
+  })
+
   it('renders accepted resolve history from executionResult without old candidates', async () => {
     const user = userEvent.setup()
     const page = pageWithItems(['suggestion-001'], {
@@ -134,6 +149,38 @@ describe('SuggestionReviewPage v05 behavior', () => {
     const paper = await expandPaper(user, '反转学习中的认知灵活性与前额叶活动')
     expect(within(paper).getByText('最终概念 · 创建新节点')).toBeVisible()
     expect(within(paper).queryByRole('button', { name: /翻转课堂/ })).toBeNull()
+    expect(within(paper).getByRole('button', { name: '重新加入待审核' })).toBeEnabled()
+    expect(within(paper).getByRole('button', { name: '改为拒绝' })).toBeEnabled()
+  })
+
+  it('reopens an accepted suggestion into the pending queue', async () => {
+    const user = userEvent.setup()
+    renderPage(createMockSuggestionService(pageWithItems(['suggestion-accepted-001'], {
+      pending: 0, accepted: 1, rejected: 0, superseded: 0,
+    }), extractionDtoMocks))
+
+    await user.click(await screen.findByRole('tab', { name: '已采纳 1' }))
+    const paper = await expandPaper(user, '反转学习中的认知灵活性与前额叶活动')
+    await user.click(within(paper).getByRole('button', { name: '重新加入待审核' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('已撤销采纳并重新加入待审核')
+    expect(screen.getByRole('tab', { name: '待审核 1' })).toBeVisible()
+    expect(screen.getByRole('tab', { name: '已采纳 0' })).toBeVisible()
+  })
+
+  it('changes an accepted suggestion to rejected after confirmation', async () => {
+    const user = userEvent.setup()
+    renderPage(createMockSuggestionService(pageWithItems(['suggestion-accepted-001'], {
+      pending: 0, accepted: 1, rejected: 0, superseded: 0,
+    }), extractionDtoMocks))
+
+    await user.click(await screen.findByRole('tab', { name: '已采纳 1' }))
+    const paper = await expandPaper(user, '反转学习中的认知灵活性与前额叶活动')
+    await user.click(within(paper).getByRole('button', { name: '改为拒绝' }))
+    await user.click(within(screen.getByRole('dialog', { name: '拒绝此条识别结果' })).getByRole('button', { name: '确认拒绝' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('已撤销采纳并改为拒绝')
+    expect(screen.getByRole('tab', { name: '拒绝意见 1' })).toBeVisible()
   })
 
   it('keeps successful batch items applied when another item fails', async () => {

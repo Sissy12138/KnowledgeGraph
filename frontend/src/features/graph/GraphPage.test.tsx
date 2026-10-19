@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { GraphCanvasHandle, GraphCanvasProps } from './GraphCanvas'
-import type { GraphDataset, GraphNode, GraphView } from './graph.types'
+import type { AuthorNetworkMode, GraphDataset, GraphNode, GraphView } from './graph.types'
 import GraphPage from './GraphPage'
 
 vi.mock('./GraphCanvas', async () => {
@@ -15,6 +15,7 @@ vi.mock('./GraphCanvas', async () => {
       {
         dataset,
         contextConceptId,
+        contextMethodId,
         contextAuthorId,
         isSearchActive,
         onError,
@@ -41,6 +42,7 @@ vi.mock('./GraphCanvas', async () => {
         <div aria-label={`测试图谱 ${dataset.view}`}>
           <span aria-label="当前画布选择">{selection?.id ?? '无'}</span>
           <span aria-label="概念上下文锚点">{contextConceptId ?? '无'}</span>
+          <span aria-label="方法上下文锚点">{contextMethodId ?? '无'}</span>
           <span aria-label="作者上下文锚点">{contextAuthorId ?? '无'}</span>
           <span aria-label="作者上下文状态">{showRelatedAuthors ? '是' : '否'}</span>
           <span aria-label="概念上下文状态">{showRelatedConcepts ? '是' : '否'}</span>
@@ -236,13 +238,24 @@ function makeDataset(view: GraphView): GraphDataset {
           { id: 'edge-author-method', sourceId: firstId, targetId: 'method-context', relationType: 'authorMethod' as const, label: '相关方法', directed: false, weight: null, evidenceIds: [], sourcePaperIds: [] },
         ],
       }
-    : view === 'paper'
+    : view === 'method'
+      ? {
+          nodes: [
+            { id: 'method-concept-context', nodeType: 'concept' as const, label: '方法相关概念', description: null, sourcePaperIds: [], metrics: {} },
+          ],
+          edges: [
+            { id: 'edge-method-concept', sourceId: firstId, targetId: 'method-concept-context', relationType: 'methodConcept' as const, label: '相关概念', directed: false, weight: null, evidenceIds: [], sourcePaperIds: [] },
+          ],
+        }
+      : view === 'paper'
       ? {
           nodes: [
             { id: 'paper-concept-context', nodeType: 'concept' as const, label: '论文相关概念', description: null, sourcePaperIds: [firstId], metrics: {} },
+            { id: 'paper-method-context', nodeType: 'method' as const, label: '论文相关方法', description: null, sourcePaperIds: [firstId], metrics: {} },
           ],
           edges: [
             { id: 'edge-paper-concept', sourceId: firstId, targetId: 'paper-concept-context', relationType: 'paperConcept' as const, label: '相关概念', directed: false, weight: null, evidenceIds: [], sourcePaperIds: [firstId] },
+            { id: 'edge-paper-method', sourceId: firstId, targetId: 'paper-method-context', relationType: 'paperMethod' as const, label: '相关方法', directed: false, weight: null, evidenceIds: [], sourcePaperIds: [firstId] },
           ],
         }
       : { nodes: [], edges: [] }
@@ -270,9 +283,14 @@ function makeDataset(view: GraphView): GraphDataset {
             'concept-context': { nodeId: 'concept-context', nodeType: 'concept' as const, aliases: [], broaderConceptIds: [], narrowerConceptIds: [], relatedConceptIds: [], paperIds: [] },
             'method-context': { nodeId: 'method-context', nodeType: 'method' as const, methodType: '实验方法', paperIds: [] },
           }
-        : view === 'paper'
+        : view === 'method'
+          ? {
+              'method-concept-context': { nodeId: 'method-concept-context', nodeType: 'concept' as const, aliases: [], broaderConceptIds: [], narrowerConceptIds: [], relatedConceptIds: [], paperIds: [] },
+            }
+          : view === 'paper'
           ? {
               'paper-concept-context': { nodeId: 'paper-concept-context', nodeType: 'concept' as const, aliases: [], broaderConceptIds: [], narrowerConceptIds: [], relatedConceptIds: [], paperIds: [firstId] },
+              'paper-method-context': { nodeId: 'paper-method-context', nodeType: 'method' as const, methodType: '实验方法', paperIds: [firstId] },
             }
           : {}),
     },
@@ -302,7 +320,12 @@ function deferred<T>() {
   return { promise, reject, resolve }
 }
 
-function renderPage(loadGraph: (view: GraphView) => Promise<GraphDataset>) {
+function renderPage(loadGraph: (
+  view: GraphView,
+  authorMode?: AuthorNetworkMode,
+  expandedAuthorId?: string | null,
+  collectionKey?: string | null,
+) => Promise<GraphDataset>) {
   return render(
     <MemoryRouter>
       <GraphPage loadGraph={loadGraph} />
@@ -315,7 +338,9 @@ describe('GraphPage', () => {
     renderPage(async (view) => makeDataset(view))
 
     expect(screen.getByRole('heading', { name: '知识图谱' })).toBeInTheDocument()
-    expect(await screen.findByText('概念网络')).toBeInTheDocument()
+    expect(await screen.findByText((_, element) =>
+      element?.tagName === 'P' && element.textContent?.includes('概念网络'),
+    )).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: '高论文概念' })).toBeInTheDocument()
     expect(screen.getByLabelText('当前画布选择')).toHaveTextContent('concept-top')
     const panel = screen.getByRole('tabpanel')
@@ -377,9 +402,28 @@ describe('GraphPage', () => {
 
     await user.click(screen.getByRole('tab', { name: '作者合作' }))
 
-    expect(loadGraph).toHaveBeenCalledWith('author')
+    expect(loadGraph).toHaveBeenCalledWith('author', 'coreBridge', null, null)
     expect(await screen.findByLabelText('测试图谱 author')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '作者1' })).toBeInTheDocument()
+  })
+
+  it('选择 Zotero 文件夹后用同一范围重新加载当前图谱', async () => {
+    const user = userEvent.setup()
+    const loadGraph = vi.fn(async (view: GraphView) => ({
+      ...makeDataset(view),
+      collections: [{ key: 'folder-a', name: '文件夹 A', paperCount: 3 }],
+    }))
+    renderPage(loadGraph)
+    await screen.findByLabelText('测试图谱 concept')
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: '图谱文献范围' }),
+      'folder-a',
+    )
+
+    await waitFor(() => expect(loadGraph).toHaveBeenCalledWith(
+      'concept', 'coreBridge', null, 'folder-a',
+    ))
   })
 
   it('画布选择节点后显示对应详情', async () => {
@@ -417,13 +461,16 @@ describe('GraphPage', () => {
     expect(methods).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('上下文开关不在方法视图出现', async () => {
+  it('方法视图可按当前方法展开相关概念', async () => {
     const user = userEvent.setup()
     renderPage(async (view) => makeDataset(view))
     await screen.findByLabelText('测试图谱 concept')
     await user.click(screen.getByRole('tab', { name: '方法网络' }))
     await screen.findByLabelText('测试图谱 method')
 
+    expect(screen.getByLabelText('方法上下文锚点')).toHaveTextContent('method-first')
+    await user.click(screen.getByRole('button', { name: '显示相关概念' }))
+    expect(screen.getByLabelText('概念上下文状态')).toHaveTextContent('是')
     expect(screen.queryByRole('button', { name: '显示相关作者' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '显示相关方法' })).not.toBeInTheDocument()
   })
@@ -558,7 +605,7 @@ describe('GraphPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: '作者合作' }))
     expect(screen.queryByLabelText('测试图谱 concept')).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('正在加载知识图谱')
-    await waitFor(() => expect(loadGraph).toHaveBeenCalledWith('author'))
+    await waitFor(() => expect(loadGraph).toHaveBeenCalledWith('author', 'coreBridge', null, null))
     fireEvent.click(screen.getByRole('tab', { name: '方法网络' }))
     await act(async () => authorRequest.reject(new Error('过期的作者请求失败')))
 
@@ -587,7 +634,7 @@ describe('GraphPage', () => {
     expect(screen.getByRole('heading', { name: '作者2' })).toBeInTheDocument()
   })
 
-  it('文献概念开关开启后累积选择论文，再次点击时反选并回退详情焦点', async () => {
+  it('文献概念开关开启后保留当前论文，并可累积或反选论文', async () => {
     const user = userEvent.setup()
     renderPage(async (view) => makeDataset(view))
     await screen.findByLabelText('测试图谱 concept')
@@ -595,10 +642,11 @@ describe('GraphPage', () => {
     await screen.findByLabelText('测试图谱 paper')
 
     await user.click(screen.getByRole('button', { name: '显示相关概念' }))
-    expect(screen.getByLabelText('当前画布选择')).toHaveTextContent('无')
-    expect(screen.getByText('请选择节点或关系查看详情。')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '选择第一个节点' }))
+    expect(screen.getByLabelText('当前画布选择')).toHaveTextContent('paper-first')
     expect(screen.getByLabelText('多选论文')).toHaveTextContent('paper-first')
+    await user.click(screen.getByRole('button', { name: '选择第一个节点' }))
+    expect(screen.getByLabelText('多选论文')).toHaveTextContent('无')
+    await user.click(screen.getByRole('button', { name: '选择第一个节点' }))
     await user.click(screen.getByRole('button', { name: '选择第二个节点' }))
     expect(screen.getByLabelText('多选论文')).toHaveTextContent('paper-first,paper-second')
     expect(screen.getByRole('heading', { name: '论文2' })).toBeInTheDocument()

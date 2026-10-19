@@ -1,0 +1,24 @@
+{
+  "appId": "com.yanzhitu.researchkg.blank",
+  "productName": "研知图-空白版",
+  "asar": true,
+  "files": ["main.cjs", "package.json"],
+  "extraResources": [
+    { "from": "../frontend/dist", "to": "frontend" },
+    { "from": "service-dist/yanzhitu-service", "to": "service-runtime" },
+    { "from": "seed-data/yanzhitu-blank.sqlite3", "to": "seed-data/yanzhitu-blank.sqlite3" },
+    { "from": "seed-data/blank-edition.marker", "to": "seed-data/blank-edition.marker" }
+  ],
+  "directories": { "output": "dist-mac-blank", "buildResources": "build" },
+  "mac": {
+    "target": ["dmg", "zip"],
+    "category": "public.app-category.education",
+    "icon": "build/icon.png",
+    "identity": "-",
+    "artifactName": "研知图-${version}-mac-${arch}-空白数据版.${ext}"
+  },
+  "dmg": {
+    "title": "研知图 ${version} 空白数据版",
+    "artifactName": "研知图-${version}-mac-${arch}-空白数据版.${ext}"
+  }
+}

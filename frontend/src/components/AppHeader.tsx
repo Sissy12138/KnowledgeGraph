@@ -7,8 +7,8 @@ export default function AppHeader() {
         <span className="app-header__subtitle">RESEARCH KG</span>
       </div>
       <div className="app-header__meta">
-        <span className="app-header__stage">阶段 1 · 应用外壳</span>
-        <span className="app-header__status">Zotero 演示连接</span>
+        <span className="app-header__stage">0.4.0 · 本地知识图谱</span>
+        <span className="app-header__status">Zotero 本地连接</span>
       </div>
     </header>
   )

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from . import zotero_import_service
 from .api import create_app
 from .database import connect
 
@@ -107,8 +108,9 @@ class ZoteroImportTest(unittest.TestCase):
         self.database_path = Path(self.temp_dir.name) / "test.sqlite3"
         self.zotero_root = Path(self.temp_dir.name) / "Zotero"
         connect(self.database_path).close()
-        self.client_patch = patch(
-            "backend.zotero_import_service._open_client",
+        self.client_patch = patch.object(
+            zotero_import_service,
+            "_open_client",
             side_effect=FakeZoteroClient,
         )
         self.client_patch.start()
@@ -219,6 +221,28 @@ class ZoteroImportTest(unittest.TestCase):
         )
         self.assertEqual("404 Not Found", status)
         self.assertEqual("ZOTERO_COLLECTION_NOT_FOUND", response["error"]["code"])
+
+    def test_preview_reports_normalized_title_duplicates(self):
+        connection = connect(self.database_path)
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO papers (
+                    id, source_type, source_library_id, source_item_key, item_type, title
+                ) VALUES (?, 'manual', 0, ?, 'journalArticle', ?)
+                """,
+                ("manual-duplicate", "manual-duplicate", "论 文：一"),
+            )
+        connection.close()
+
+        status, preview = self._request(
+            "POST", "/api/v1/zotero/import-preview", self._selection()
+        )
+
+        self.assertEqual("200 OK", status)
+        item = next(value for value in preview["items"] if value["title"] == "论文一")
+        self.assertEqual("manual-duplicate", item["duplicateOfPaperId"])
+        self.assertEqual("同标题", item["duplicateReason"])
 
 
 if __name__ == "__main__":

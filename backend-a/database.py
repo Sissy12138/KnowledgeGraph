@@ -12,6 +12,20 @@ def connect(database_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(database_path)
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    # CREATE TABLE IF NOT EXISTS does not add columns to an existing database.
+    # Keep small, forward-only migrations here so packaged upgrades can open an
+    # older user database without requiring a separate migration command.
+    analysis_job_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(analysis_jobs)").fetchall()
+    }
+    if "result_mode" not in analysis_job_columns:
+        connection.execute(
+            """
+            ALTER TABLE analysis_jobs
+            ADD COLUMN result_mode TEXT NOT NULL DEFAULT 'preserve'
+                CHECK (result_mode IN ('preserve', 'replace'))
+            """
+        )
     return connection
 
 

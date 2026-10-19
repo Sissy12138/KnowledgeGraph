@@ -41,7 +41,7 @@ describe('AppShell', () => {
     expect(screen.getByRole('link', { name: '知识图谱' })).not.toHaveAttribute(
       'aria-current',
     )
-    expect(screen.getByText('阶段 1 · 应用外壳')).toBeInTheDocument()
+    expect(screen.getByText('0.4.0 · 本地知识图谱')).toBeInTheDocument()
     expect(
       screen.getByRole('combobox', { name: '界面主题' }),
     ).toBeInTheDocument()

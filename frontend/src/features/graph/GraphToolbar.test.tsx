@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
@@ -23,6 +23,9 @@ const methodNode: GraphNode = {
 
 const baseProps = {
   view: 'concept' as const,
+  language: 'zh' as const,
+  collectionKey: null,
+  collections: [],
   query: '',
   searchResults: [] as GraphNode[],
   onViewChange: vi.fn(),
@@ -30,6 +33,8 @@ const baseProps = {
   onResultSelect: vi.fn(),
   onFit: vi.fn(),
   onReset: vi.fn(),
+  onLanguageChange: vi.fn(),
+  onCollectionChange: vi.fn(),
 }
 
 describe('GraphToolbar', () => {
@@ -137,6 +142,7 @@ describe('GraphToolbar', () => {
     }
     render(<ControlledToolbar />)
 
+    expect(screen.getByText('搜索节点')).toBeInTheDocument()
     await user.type(
       screen.getByRole('searchbox', { name: '搜索当前网络中的节点' }),
       '反转',
@@ -176,7 +182,7 @@ describe('GraphToolbar', () => {
     )
 
     const listbox = screen.getByRole('listbox')
-    const options = screen.getAllByRole('option')
+    const options = within(listbox).getAllByRole('option')
     expect(options).toHaveLength(2)
     expect(options.every((option) => option.getAttribute('tabindex') === '-1')).toBe(true)
     expect(options.filter((option) => option.getAttribute('aria-selected') === 'true')).toHaveLength(1)
@@ -227,5 +233,39 @@ describe('GraphToolbar', () => {
 
     expect(onFit).toHaveBeenCalledTimes(1)
     expect(onReset).toHaveBeenCalledTimes(1)
+  })
+
+  it('只切换知识图谱的显示语言', async () => {
+    const user = userEvent.setup()
+    const onLanguageChange = vi.fn()
+    render(<GraphToolbar {...baseProps} onLanguageChange={onLanguageChange} />)
+
+    expect(screen.getByRole('button', { name: '中文' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: 'English' }))
+
+    expect(onLanguageChange).toHaveBeenCalledWith('en')
+  })
+
+  it('可以选择单个 Zotero 文件夹或全部文件夹', async () => {
+    const user = userEvent.setup()
+    const onCollectionChange = vi.fn()
+    render(
+      <GraphToolbar
+        {...baseProps}
+        collections={[
+          { key: 'folder-a', name: '文件夹 A', paperCount: 3 },
+          { key: 'folder-b', name: '文件夹 B', paperCount: 2 },
+        ]}
+        onCollectionChange={onCollectionChange}
+      />,
+    )
+
+    expect(screen.getByText('文献范围')).toBeInTheDocument()
+    const select = screen.getByRole('combobox', { name: '图谱文献范围' })
+    expect(within(select).getByRole('option', { name: '全部文件夹' })).toBeInTheDocument()
+    await user.selectOptions(select, 'folder-b')
+    expect(onCollectionChange).toHaveBeenCalledWith('folder-b')
+    await user.selectOptions(select, '')
+    expect(onCollectionChange).toHaveBeenLastCalledWith(null)
   })
 })

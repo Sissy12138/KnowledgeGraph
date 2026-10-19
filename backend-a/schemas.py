@@ -54,6 +54,9 @@ RELATION_TYPES = {
     "contradicts",
     "relatedTo",
     "broaderThan",
+    "combinedWith",
+    "variantOf",
+    "alternativeTo",
     "cites",
 }
 ANALYZED_RELATION_TYPES = {
@@ -61,6 +64,9 @@ ANALYZED_RELATION_TYPES = {
     "contradicts",
     "relatedTo",
     "broaderThan",
+    "combinedWith",
+    "variantOf",
+    "alternativeTo",
     "cites",
 }
 
@@ -74,6 +80,9 @@ RELATION_ENDPOINTS = {
     "contradicts": ("finding", "finding"),
     "relatedTo": ("concept", "concept"),
     "broaderThan": ("concept", "concept"),
+    "combinedWith": ("method", "method"),
+    "variantOf": ("method", "method"),
+    "alternativeTo": ("method", "method"),
     "cites": ("paper", "paper"),
 }
 

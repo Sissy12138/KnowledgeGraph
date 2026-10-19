@@ -29,7 +29,7 @@ export const paperDetailMocks: PaperDetailDto[] = [
     status: 'pendingReview',
     latestJobId: 'job-001',
     latestExtractionId: 'extraction-001',
-    pendingSuggestionCount: 2,
+    pendingSuggestionCount: 4,
     researchOverview: {
       researchTopics: ['反转学习', '认知灵活性', '脑电'],
       researchQuestion: '反馈相关神经信号能否预测规则变化后的行为调整？',

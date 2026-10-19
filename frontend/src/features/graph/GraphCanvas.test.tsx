@@ -124,6 +124,7 @@ const baseProps = {
   highlightedNodeIds: new Set<string>(),
   isSearchActive: false,
   contextConceptId: null,
+  contextMethodId: null,
   contextAuthorId: null,
   showRelatedAuthors: false,
   showRelatedConcepts: false,

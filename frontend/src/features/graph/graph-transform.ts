@@ -18,6 +18,7 @@ export type GraphPresentation = {
   highlightedNodeIds: Set<string>
   isSearchActive: boolean
   contextConceptId: string | null
+  contextMethodId: string | null
   contextAuthorId: string | null
   showRelatedAuthors: boolean
   showRelatedConcepts: boolean
@@ -42,7 +43,7 @@ export function findMatchingNodes(dataset: GraphDataset, query: string): GraphNo
   if (!normalized) return dataset.nodes
 
   return dataset.nodes.filter((node) =>
-    `${node.label} ${node.description ?? ''}`.toLocaleLowerCase().includes(normalized),
+    `${node.label} ${node.englishLabel ?? ''} ${node.description ?? ''}`.toLocaleLowerCase().includes(normalized),
   )
 }
 
@@ -77,6 +78,11 @@ function getNodeSize(
   presentation: GraphPresentation,
 ): number {
   if (dataset.view === 'author' && node.nodeType === 'author') {
+    if (node.authorTier === 'core') {
+      return Math.min(34 + 6 * Math.sqrt(new Set(node.sourcePaperIds).size), 54)
+    }
+    if (node.authorTier === 'bridge') return 27
+    if (node.authorTier === 'context') return 21
     const totals = dataset.nodes
       .filter((candidate) => candidate.nodeType === 'author')
       .map((candidate) => Math.max(candidate.metrics.totalImpactFactor ?? 0, 0))
@@ -92,16 +98,23 @@ function getNodeSize(
   }
 
   if (
-    dataset.view === 'author'
+    (dataset.view === 'author' || dataset.view === 'method')
     && (node.nodeType === 'concept' || node.nodeType === 'method')
-    && presentation.contextAuthorId
+    && (presentation.contextAuthorId || presentation.contextMethodId)
   ) {
+    const contextId = dataset.view === 'author'
+      ? presentation.contextAuthorId
+      : presentation.contextMethodId
     const sharedPaperIds = new Set(
       dataset.contextOverlay.edges
         .filter((edge) =>
-          edge.sourceId === presentation.contextAuthorId
+          edge.sourceId === contextId
           && edge.targetId === node.id
-          && (edge.relationType === 'authorConcept' || edge.relationType === 'authorMethod'))
+          && (
+            edge.relationType === 'authorConcept'
+            || edge.relationType === 'authorMethod'
+            || edge.relationType === 'methodConcept'
+          ))
         .flatMap((edge) => edge.sourcePaperIds),
     )
     return Math.min(22 + 8 * Math.sqrt(sharedPaperIds.size), 48)
@@ -132,6 +145,40 @@ function getNodeLabel(node: GraphNode, dataset: GraphDataset): string {
   const journal = paper.journal?.name || 'Preprint'
   const year = paper.year ?? 'n.d.'
   return `${firstAuthor}\n${journal} · ${year}`
+}
+
+type GraphPosition = { x: number; y: number }
+
+/**
+ * 大型全量图采用稳定的类型分区，而非让力导向算法把数百个节点压成一团。
+ * 关系仍全部保留；分区只负责给初始浏览提供可读的空间秩序。
+ */
+function getDenseGraphPositions(nodes: GraphNode[]): Map<string, GraphPosition> {
+  const positions = new Map<string, GraphPosition>()
+  const centers: Record<GraphNodeType, GraphPosition> = {
+    concept: { x: -360, y: -220 },
+    method: { x: 360, y: -220 },
+    author: { x: -360, y: 220 },
+    paper: { x: 360, y: 220 },
+    finding: { x: 0, y: 0 },
+  }
+
+  for (const nodeType of NODE_TYPE_ORDER) {
+    const group = nodes.filter((node) => node.nodeType === nodeType)
+    const columns = Math.max(1, Math.ceil(Math.sqrt(group.length * 1.35)))
+    const spacing = group.length > 90 ? 30 : 38
+    const center = centers[nodeType]
+    group.forEach((node, index) => {
+      const column = index % columns
+      const row = Math.floor(index / columns)
+      positions.set(node.id, {
+        x: center.x + (column - (columns - 1) / 2) * spacing,
+        y: center.y + (row - (Math.ceil(group.length / columns) - 1) / 2) * spacing,
+      })
+    })
+  }
+
+  return positions
 }
 
 function escapeTooltipText(value: string): string {
@@ -182,11 +229,16 @@ function getVisibleGraph(dataset: GraphDataset, presentation: GraphPresentation)
     ? presentation.contextConceptId
     : dataset.view === 'author'
       ? presentation.contextAuthorId
-      : null
+      : dataset.view === 'method'
+        ? presentation.contextMethodId
+        : null
   const contextEdges = dataset.view === 'paper'
-    ? presentation.showRelatedConcepts
+    ? presentation.showRelatedConcepts || presentation.showRelatedMethods
       ? dataset.contextOverlay.edges.filter((edge) =>
-        edge.relationType === 'paperConcept'
+        (
+          (edge.relationType === 'paperConcept' && presentation.showRelatedConcepts)
+          || (edge.relationType === 'paperMethod' && presentation.showRelatedMethods)
+        )
         && presentation.selectedPaperIds.includes(edge.sourceId))
       : []
     : contextNodeId
@@ -197,6 +249,7 @@ function getVisibleGraph(dataset: GraphDataset, presentation: GraphPresentation)
         || (edge.relationType === 'conceptMethod' && presentation.showRelatedMethods)
         || (edge.relationType === 'authorConcept' && presentation.showRelatedConcepts)
         || (edge.relationType === 'authorMethod' && presentation.showRelatedMethods)
+        || (edge.relationType === 'methodConcept' && presentation.showRelatedConcepts)
       ),
       )
       : []
@@ -220,10 +273,19 @@ export function getVisibleGraphCounts(
 
 function getFocusedNodeIds(dataset: GraphDataset, presentation: GraphPresentation): Set<string> | null {
   if (dataset.view === 'paper') {
-    if (!presentation.showRelatedConcepts || presentation.selectedPaperIds.length === 0) return null
+    if (
+      (!presentation.showRelatedConcepts && !presentation.showRelatedMethods)
+      || presentation.selectedPaperIds.length === 0
+    ) return null
     const focused = new Set(presentation.selectedPaperIds)
     for (const edge of dataset.contextOverlay.edges) {
-      if (edge.relationType === 'paperConcept' && focused.has(edge.sourceId)) {
+      if (
+        (
+          (edge.relationType === 'paperConcept' && presentation.showRelatedConcepts)
+          || (edge.relationType === 'paperMethod' && presentation.showRelatedMethods)
+        )
+        && focused.has(edge.sourceId)
+      ) {
         focused.add(edge.targetId)
       }
     }
@@ -234,12 +296,16 @@ function getFocusedNodeIds(dataset: GraphDataset, presentation: GraphPresentatio
     ? presentation.contextConceptId
     : dataset.view === 'author'
       ? presentation.contextAuthorId
-      : null
+      : dataset.view === 'method'
+        ? presentation.contextMethodId
+        : null
   if (!anchorId) return null
 
   const hasVisibleContext = dataset.view === 'concept'
     ? presentation.showRelatedAuthors || presentation.showRelatedMethods
-    : presentation.showRelatedConcepts || presentation.showRelatedMethods
+    : dataset.view === 'method'
+      ? presentation.showRelatedConcepts
+      : presentation.showRelatedConcepts || presentation.showRelatedMethods
   if (dataset.view === 'author' && !hasVisibleContext) return null
 
   const focused = new Set([anchorId])
@@ -263,6 +329,9 @@ function getFocusedNodeIds(dataset: GraphDataset, presentation: GraphPresentatio
     if (edge.relationType === 'authorMethod' && presentation.showRelatedMethods) {
       focused.add(edge.targetId)
     }
+    if (edge.relationType === 'methodConcept' && presentation.showRelatedConcepts) {
+      focused.add(edge.targetId)
+    }
   }
   return focused
 }
@@ -275,6 +344,12 @@ function buildPresentationNodes(
 ) {
   const visible = getVisibleGraph(dataset, presentation)
   const focusedNodeIds = getFocusedNodeIds(dataset, presentation)
+  // 全量网络中同时绘制数百条文字标签会遮住节点与关系；保留完整节点，
+  // 仅在选中、搜索命中或悬停时展示名称。
+  const isDenseGraph = dataset.view === 'author'
+    ? visible.nodes.length > 24
+    : visible.nodes.length > 36
+  const densePositions = isDenseGraph ? getDenseGraphPositions(visible.nodes) : null
 
   return visible.nodes.map((node) => {
     const nodeStyle = theme.graph.nodes[node.nodeType]
@@ -282,9 +357,14 @@ function buildPresentationNodes(
       && presentation.selected.id === node.id)
       || (dataset.view === 'paper' && presentation.selectedPaperIds.includes(node.id))
     const isHighlighted = presentation.highlightedNodeIds.has(node.id)
+    const tierOpacity = dataset.view === 'author' && node.authorTier === 'bridge'
+      ? 0.78
+      : dataset.view === 'author' && node.authorTier === 'context'
+        ? 0.62
+        : 1
     const opacity = presentation.isSearchActive
       ? (isHighlighted ? 1 : 0.22)
-      : (focusedNodeIds && !focusedNodeIds.has(node.id) ? 0.18 : 1)
+      : (focusedNodeIds && !focusedNodeIds.has(node.id) ? 0.18 : tierOpacity)
 
     const label = getNodeLabel(node, dataset)
     const nodeSize = getNodeSize(node, dataset, presentation)
@@ -295,6 +375,7 @@ function buildPresentationNodes(
       category: NODE_TYPE_LABELS[node.nodeType],
       symbol: 'circle',
       symbolSize: nodeSize,
+      ...(densePositions ? densePositions.get(node.id) : {}),
       itemStyle: {
         color: nodeStyle.background,
         opacity,
@@ -304,7 +385,10 @@ function buildPresentationNodes(
         shadowBlur: isSelected ? 4 : 0,
       },
       label: {
-        show: !(dataset.view === 'author' && node.nodeType === 'author' && nodeSize === 20),
+        show: (node.authorTier === 'core')
+          || (!isDenseGraph && !(dataset.view === 'author' && node.nodeType === 'author' && nodeSize <= 21))
+          || isSelected
+          || isHighlighted,
         formatter: label,
         ...(node.nodeType === 'paper' && (dataset.view === 'method' || dataset.view === 'paper')
           ? { width: 144, overflow: 'break' as const, lineHeight: 17, align: 'center' as const }
@@ -334,30 +418,70 @@ function buildPresentationLinks(
   theme: AppTheme,
 ) {
   const focusedNodeIds = getFocusedNodeIds(dataset, presentation)
+  const isDenseGraph = dataset.view === 'author'
+    ? dataset.nodes.length > 24
+    : dataset.nodes.length > 36
+  const methodPairCounts = new Map<string, number>()
+  for (const edge of edges) {
+    if (!['combinedWith', 'variantOf', 'alternativeTo'].includes(edge.relationType)) continue
+    const key = [edge.sourceId, edge.targetId].sort().join('|')
+    methodPairCounts.set(key, (methodPairCounts.get(key) ?? 0) + 1)
+  }
   return edges.map((edge) => {
     const isContextEdge = edge.relationType === 'conceptAuthor'
       || edge.relationType === 'conceptMethod'
       || edge.relationType === 'authorConcept'
       || edge.relationType === 'authorMethod'
+      || edge.relationType === 'methodConcept'
       || edge.relationType === 'paperConcept'
+      || edge.relationType === 'paperMethod'
     const isFocused = !focusedNodeIds
       || (focusedNodeIds.has(edge.sourceId) && focusedNodeIds.has(edge.targetId))
-    const lineType: 'dashed' | 'solid' = isContextEdge ? 'dashed' : 'solid'
+    const lineType: 'dashed' | 'solid' = isContextEdge || edge.relationType === 'coOccurs'
+      ? 'dashed'
+      : 'solid'
+    const methodRelationStyle = methodEdgeStyle(edge.relationType, theme)
+    const pairKey = [edge.sourceId, edge.targetId].sort().join('|')
+    const samePairCount = methodPairCounts.get(pairKey) ?? 0
+    const curveness = samePairCount > 1 ? methodEdgeCurveness(edge.relationType) : 0
     return {
       id: edge.id,
       name: edge.label,
       source: edge.sourceId,
       target: edge.targetId,
       lineStyle: {
-        color: theme.graph.edge,
-        opacity: isFocused ? 0.72 : 0.12,
-        width: edge.relationType === 'coAuthor' ? Math.min(2 + (edge.weight ?? 0), 8) : 2,
-        type: lineType,
+        color: methodRelationStyle.color,
+        opacity: isFocused ? (isDenseGraph ? 0.28 : 0.72) : 0.12,
+        width: edge.relationType === 'coAuthor'
+          ? Math.min(2 + (edge.weight ?? 0), 8)
+          : edge.relationType === 'coOccurs'
+            ? Math.min(1 + (edge.weight ?? 1) * 0.4, 2.6)
+            : methodRelationStyle.width,
+        type: methodRelationStyle.type ?? lineType,
+        curveness,
       },
       symbol: edge.directed ? ['none', 'arrow'] : ['none', 'none'],
       symbolSize: edge.directed ? [0, 8] : [0, 0],
     }
   })
+}
+
+function methodEdgeStyle(
+  relationType: GraphEdge['relationType'],
+  theme: AppTheme,
+): { color: string; width: number; type?: 'dashed' | 'solid' } {
+  // 方法网络的线只表达“存在已审核关系”；具体类型交由悬浮/详情文字呈现，避免颜色语义过载。
+  if (relationType === 'combinedWith' || relationType === 'variantOf' || relationType === 'alternativeTo') {
+    return { color: theme.graph.edge, width: 2 }
+  }
+  return { color: theme.graph.edge, width: 2 }
+}
+
+function methodEdgeCurveness(relationType: GraphEdge['relationType']) {
+  if (relationType === 'combinedWith') return -0.18
+  if (relationType === 'variantOf') return 0
+  if (relationType === 'alternativeTo') return 0.18
+  return 0
 }
 
 /** 只合并节点呈现，不替换力导向数据模型和已产生的视口状态。 */
@@ -390,6 +514,7 @@ export function buildGraphOption(
   const visible = getVisibleGraph(dataset, presentation)
   const theme = getAppTheme(presentation.themeId)
   const categories = buildCategories(visible.nodes, theme)
+  const isDenseGraph = visible.nodes.length > 36
   return {
     tooltip: {
       trigger: 'item',
@@ -408,19 +533,25 @@ export function buildGraphOption(
       {
         id: GRAPH_SERIES_ID,
         type: 'graph',
-        layout: 'force',
+        layout: isDenseGraph ? 'none' : 'force',
         roam: true,
         draggable: true,
         categories,
         data: buildPresentationNodes(dataset, presentation, theme),
         links: buildPresentationLinks(dataset, presentation, visible.edges, theme),
-        force: {
-          repulsion: 380,
-          edgeLength: [100, 180],
-          gravity: 0.08,
-        },
+        ...(isDenseGraph ? {} : {
+          force: {
+            initLayout: 'circular',
+            repulsion: 380,
+            edgeLength: [100, 180],
+            gravity: 0.08,
+          },
+        }),
         lineStyle: { color: theme.graph.edge },
-        emphasis: { focus: 'adjacency' },
+        emphasis: {
+          focus: 'adjacency',
+          label: { show: true },
+        },
       },
     ],
   }

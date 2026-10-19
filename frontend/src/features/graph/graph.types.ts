@@ -1,4 +1,5 @@
 export type GraphView = 'concept' | 'method' | 'author' | 'paper'
+export type AuthorNetworkMode = 'core' | 'coreBridge' | 'all'
 export type GraphScenario = 'success' | 'empty' | 'error'
 export type GraphNodeType = 'paper' | 'author' | 'concept' | 'method' | 'finding'
 
@@ -20,14 +21,28 @@ export type GraphPaperSummary = {
   id: string
   title: string
   authorNames: string[]
+  authors?: Array<{
+    id: string
+    name: string
+    order: number
+    contributionRoles: Array<'firstAuthor' | 'coFirstAuthor' | 'correspondingAuthor'>
+  }>
   year: number | null
   journal: JournalInfo | null
+  zoteroCollections?: Array<{ key: string; name: string }>
+}
+
+export type GraphCollection = {
+  key: string
+  name: string
+  paperCount: number
 }
 
 export type GraphNode = {
   id: string
   nodeType: GraphNodeType
   label: string
+  englishLabel?: string | null
   description: string | null
   sourcePaperIds: string[]
   metrics: {
@@ -35,6 +50,7 @@ export type GraphNode = {
     connectionCount?: number
     totalImpactFactor?: number
   }
+  authorTier?: 'core' | 'bridge' | 'context'
 }
 
 export type GraphEdge = {
@@ -44,6 +60,10 @@ export type GraphEdge = {
   relationType:
     | 'broaderThan'
     | 'relatedTo'
+    | 'coOccurs'
+    | 'combinedWith'
+    | 'variantOf'
+    | 'alternativeTo'
     | 'uses'
     | 'coAuthor'
     | 'cites'
@@ -51,7 +71,9 @@ export type GraphEdge = {
     | 'conceptMethod'
     | 'authorConcept'
     | 'authorMethod'
+    | 'methodConcept'
     | 'paperConcept'
+    | 'paperMethod'
   label: string
   directed: boolean
   weight: number | null
@@ -70,6 +92,7 @@ export type ConceptNodeDetail = BaseNodeDetail & {
   broaderConceptIds: string[]
   narrowerConceptIds: string[]
   relatedConceptIds: string[]
+  coOccurringConceptIds?: string[]
   paperIds: string[]
 }
 
@@ -112,6 +135,7 @@ export type GraphDataset = {
   papers: Record<string, GraphPaperSummary>
   relatedNodeLabels: Record<string, string>
   nodeDetails: Record<string, GraphNodeDetail>
+  collections?: GraphCollection[]
 }
 
 export type GraphSelection =

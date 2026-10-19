@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { getPaperDetail, getPapers } from '../papers/paper.service'
 import { getGraphDataset } from './graph.service'
 import type { GraphView } from './graph.types'
@@ -6,6 +6,83 @@ import type { GraphView } from './graph.types'
 const graphViews: GraphView[] = ['concept', 'method', 'author', 'paper']
 
 describe('getGraphDataset', () => {
+  it('API 模式从 A 获取真实图谱响应并转换为页面数据集', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [{ id: 'paper-api', title: 'API 论文', authors: [], year: 2025, doi: null, journal: null, status: 'unprocessed', latestJobId: null, pendingSuggestionCount: 0, createdAt: '', updatedAt: '' }], page: 1, pageSize: 100, total: 1 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        nodes: [{ id: 'paper-api', nodeType: 'paper', label: 'API 论文', englishLabel: 'API Paper', description: null, sourcePaperIds: ['paper-api'], createdAt: '', updatedAt: '' }],
+        edges: [], evidence: [], meta: { focusNodeId: 'paper-api', depth: 2, nodeCount: 1, edgeCount: 0, totalMatched: 1, truncated: false },
+      }), { status: 200 })),
+    )
+    const result = await getGraphDataset('paper')
+    expect(result.nodes[0]).toMatchObject({ id: 'paper-api', label: 'API 论文', englishLabel: 'API Paper' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('API 模式为概念生成基于共同论文的作者和方法叠加层', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        items: [{ id: 'paper-api', title: 'API 论文', authors: [], year: 2025, doi: null, journal: null, status: 'completed', latestJobId: null, pendingSuggestionCount: 0, createdAt: '', updatedAt: '' }],
+        page: 1, pageSize: 100, total: 1,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        nodes: [
+          { id: 'paper-api', nodeType: 'paper', label: 'API 论文', description: null, sourcePaperIds: ['paper-api'], createdAt: '', updatedAt: '' },
+          { id: 'concept-api', nodeType: 'concept', label: '测试概念', description: null, sourcePaperIds: ['paper-api'], createdAt: '', updatedAt: '' },
+          { id: 'author-api', nodeType: 'author', label: '测试作者', description: null, sourcePaperIds: ['paper-api'], createdAt: '', updatedAt: '' },
+          { id: 'method-api', nodeType: 'method', label: '测试方法', description: null, sourcePaperIds: ['paper-api'], createdAt: '', updatedAt: '' },
+        ],
+        edges: [], evidence: [], meta: { focusNodeId: null, depth: null, nodeCount: 4, edgeCount: 0, totalMatched: 4, truncated: false },
+      }), { status: 200 })),
+    )
+
+    const result = await getGraphDataset('concept')
+
+    expect(result.contextOverlay.nodes.map((node) => node.id).sort()).toEqual(['author-api', 'method-api'])
+    expect(result.contextOverlay.edges.map((edge) => edge.relationType).sort()).toEqual(['conceptAuthor', 'conceptMethod'])
+    expect(result.nodeDetails['author-api'].nodeType).toBe('author')
+    expect(result.nodeDetails['method-api'].nodeType).toBe('method')
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('按 Zotero 文件夹同时过滤论文和图谱节点，并保留全部文件夹选项', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const paperBase = {
+      authors: [], year: 2026, doi: null, journal: null, status: 'completed',
+      latestJobId: null, pendingSuggestionCount: 0, createdAt: '', updatedAt: '',
+    }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        items: [
+          { ...paperBase, id: 'paper-a', title: '论文 A', zoteroCollections: [{ key: 'folder-a', name: '文件夹 A' }] },
+          { ...paperBase, id: 'paper-b', title: '论文 B', zoteroCollections: [{ key: 'folder-b', name: '文件夹 B' }] },
+        ],
+        page: 1, pageSize: 100, total: 2,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        nodes: [
+          { id: 'paper-a', nodeType: 'paper', label: '论文 A', description: null, sourcePaperIds: ['paper-a'], createdAt: '', updatedAt: '' },
+          { id: 'paper-b', nodeType: 'paper', label: '论文 B', description: null, sourcePaperIds: ['paper-b'], createdAt: '', updatedAt: '' },
+          { id: 'concept-a', nodeType: 'concept', label: '概念 A', description: null, sourcePaperIds: ['paper-a'], createdAt: '', updatedAt: '' },
+          { id: 'concept-b', nodeType: 'concept', label: '概念 B', description: null, sourcePaperIds: ['paper-b'], createdAt: '', updatedAt: '' },
+        ],
+        edges: [], evidence: [], meta: { focusNodeId: null, depth: null, nodeCount: 4, edgeCount: 0, totalMatched: 4, truncated: false },
+      }), { status: 200 })),
+    )
+
+    const result = await getGraphDataset('concept', 'success', { collectionKey: 'folder-a' })
+
+    expect(result.nodes.map((node) => node.id)).toEqual(['concept-a'])
+    expect(Object.keys(result.papers)).toEqual(['paper-a'])
+    expect(result.collections?.map((collection) => collection.key)).toEqual(['folder-a', 'folder-b'])
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
   it('返回具有稳定节点和关系的概念网络', async () => {
     const result = await getGraphDataset('concept')
 
@@ -15,30 +92,33 @@ describe('getGraphDataset', () => {
     expect(result.nodeDetails['concept-reversal-learning'].nodeType).toBe('concept')
   })
 
-  it('概念网络提供以稳定节点 ID 和共同论文构造的作者与方法上下文', async () => {
+  it('概念网络只保留概念及概念之间的关系', async () => {
     const result = await getGraphDataset('concept')
-    const primaryNodeById = new Map(result.nodes.map((node) => [node.id, node]))
-    const contextNodeById = new Map(
-      result.contextOverlay.nodes.map((node) => [node.id, node]),
-    )
 
-    expect(result.contextOverlay.nodes.some((node) => node.nodeType === 'author')).toBe(true)
-    expect(result.contextOverlay.nodes.some((node) => node.nodeType === 'method')).toBe(true)
-    expect(result.contextOverlay.edges.some((edge) => edge.relationType === 'conceptAuthor')).toBe(true)
-    expect(result.contextOverlay.edges.some((edge) => edge.relationType === 'conceptMethod')).toBe(true)
+    expect(result.nodes.every((node) => node.nodeType === 'concept')).toBe(true)
+    expect(result.edges.every((edge) => ['broaderThan', 'relatedTo', 'coOccurs'].includes(edge.relationType))).toBe(true)
+    expect(result.contextOverlay.nodes.every((node) =>
+      node.nodeType === 'author' || node.nodeType === 'method',
+    )).toBe(true)
+    expect(result.contextOverlay.edges.every((edge) =>
+      edge.relationType === 'conceptAuthor' || edge.relationType === 'conceptMethod',
+    )).toBe(true)
+  })
 
-    for (const edge of result.contextOverlay.edges) {
-      const concept = primaryNodeById.get(edge.sourceId)
-      const contextNode = contextNodeById.get(edge.targetId)
-      const sharedPaperIds = concept?.sourcePaperIds.filter((paperId) =>
-        contextNode?.sourcePaperIds.includes(paperId),
+  it('概念网络用虚线候选连接同篇论文的概念', async () => {
+    const result = await getGraphDataset('concept')
+    const candidates = result.edges.filter((edge) => edge.relationType === 'coOccurs')
+
+    expect(candidates.length).toBeGreaterThan(0)
+    for (const edge of candidates) {
+      const source = result.nodes.find((node) => node.id === edge.sourceId)
+      const target = result.nodes.find((node) => node.id === edge.targetId)
+      const sharedPaperIds = source?.sourcePaperIds.filter((paperId) =>
+        target?.sourcePaperIds.includes(paperId),
       ) ?? []
-
-      expect(concept?.nodeType).toBe('concept')
-      expect(['author', 'method']).toContain(contextNode?.nodeType)
+      expect(edge.directed).toBe(false)
       expect(edge.sourcePaperIds).toEqual(sharedPaperIds)
-      expect(edge.sourcePaperIds.length).toBeGreaterThan(0)
-      expect(result.nodeDetails[edge.targetId]?.nodeId).toBe(edge.targetId)
+      expect(edge.weight).toBe(sharedPaperIds.length)
     }
   })
 
@@ -50,75 +130,78 @@ describe('getGraphDataset', () => {
     expect(collaboration?.weight).toBe(collaboration?.sourcePaperIds.length)
   })
 
-  it('作者网络按论文外键提供概念和方法上下文，并计算已知论文 JIF 总和', async () => {
+  it('作者网络只显示作者合作，并保留已知论文 JIF 总和', async () => {
     const result = await getGraphDataset('author')
     const authorById = new Map(result.nodes.map((node) => [node.id, node]))
-    const contextById = new Map(result.contextOverlay.nodes.map((node) => [node.id, node]))
 
     expect(authorById.get('author-li-ming')?.metrics.totalImpactFactor).toBe(41.2)
     expect(authorById.get('author-wu-lan')?.metrics.totalImpactFactor).toBe(0)
-    expect(result.contextOverlay.nodes.some((node) => node.nodeType === 'concept')).toBe(true)
-    expect(result.contextOverlay.nodes.some((node) => node.nodeType === 'method')).toBe(true)
-    expect(result.contextOverlay.edges.some((edge) => edge.relationType === 'authorConcept')).toBe(true)
-    expect(result.contextOverlay.edges.some((edge) => edge.relationType === 'authorMethod')).toBe(true)
-
-    for (const edge of result.contextOverlay.edges) {
-      const author = authorById.get(edge.sourceId)
-      const contextNode = contextById.get(edge.targetId)
-      const sharedPaperIds = author?.sourcePaperIds.filter((paperId) =>
-        contextNode?.sourcePaperIds.includes(paperId),
-      ) ?? []
-
-      expect(author?.nodeType).toBe('author')
-      expect(['concept', 'method']).toContain(contextNode?.nodeType)
-      expect(edge.sourcePaperIds).toEqual(sharedPaperIds)
-      expect(edge.sourcePaperIds.length).toBeGreaterThan(0)
-      expect(result.nodeDetails[edge.targetId]?.nodeId).toBe(edge.targetId)
-    }
+    expect(result.nodes.every((node) => node.nodeType === 'author')).toBe(true)
+    expect(result.edges.every((edge) => edge.relationType === 'coAuthor')).toBe(true)
+    expect(result.contextOverlay.nodes.every((node) =>
+      node.nodeType === 'concept' || node.nodeType === 'method',
+    )).toBe(true)
+    expect(result.contextOverlay.edges.every((edge) =>
+      edge.relationType === 'authorConcept' || edge.relationType === 'authorMethod',
+    )).toBe(true)
   })
 
-  it('方法网络以论文到方法的 uses 边连接两类节点', async () => {
+  it('作者网络支持核心、核心加桥接和全量三种范围', async () => {
+    const core = await getGraphDataset('author', 'success', { authorMode: 'core' })
+    const bridge = await getGraphDataset('author', 'success', { authorMode: 'coreBridge' })
+    const all = await getGraphDataset('author', 'success', { authorMode: 'all' })
+
+    expect(core.nodes.every((node) => node.authorTier === 'core')).toBe(true)
+    expect(core.nodes.some((node) => node.id === 'author-wang-fang')).toBe(false)
+    expect(bridge.nodes.find((node) => node.id === 'author-wang-fang')?.authorTier).toBe('bridge')
+    expect(bridge.nodes.length).toBeGreaterThanOrEqual(core.nodes.length)
+    expect(all.nodes.length).toBeGreaterThanOrEqual(bridge.nodes.length)
+    expect(bridge.edges.every((edge) => edge.relationType === 'coAuthor')).toBe(true)
+  })
+
+  it('方法网络只显示方法，并区分已判定关系与同篇使用候选', async () => {
     const result = await getGraphDataset('method')
     const nodeTypeById = new Map(result.nodes.map((node) => [node.id, node.nodeType]))
-    const usesEdges = result.edges.filter((edge) => edge.relationType === 'uses')
+    const relatedEdges = result.edges.filter((edge) =>
+      ['combinedWith', 'variantOf', 'alternativeTo', 'coOccurs'].includes(edge.relationType),
+    )
 
-    expect(result.nodes.filter((node) => node.nodeType === 'paper')).toHaveLength(5)
-    expect(usesEdges.length).toBeGreaterThan(0)
-    expect(usesEdges.every((edge) => nodeTypeById.get(edge.sourceId) === 'paper')).toBe(true)
-    expect(usesEdges.every((edge) => nodeTypeById.get(edge.targetId) === 'method')).toBe(true)
-    expect(result.nodeDetails['paper-002'].nodeType).toBe('paper')
+    expect(result.nodes.every((node) => node.nodeType === 'method')).toBe(true)
+    expect(relatedEdges.length).toBeGreaterThan(0)
+    expect(relatedEdges.every((edge) => nodeTypeById.get(edge.sourceId) === 'method')).toBe(true)
+    expect(relatedEdges.every((edge) => nodeTypeById.get(edge.targetId) === 'method')).toBe(true)
+    expect(result.contextOverlay.nodes.every((node) => node.nodeType === 'concept')).toBe(true)
+    expect(result.contextOverlay.edges.every((edge) => edge.relationType === 'methodConcept')).toBe(true)
   })
 
-  it('方法的来源论文与指向该方法的 uses 边一致', async () => {
-    const result = await getGraphDataset('method')
-    const methodNodes = result.nodes.filter((node) => node.nodeType === 'method')
+  it('文献引用网络同时提供论文实际涉及的概念和方法', async () => {
+    const result = await getGraphDataset('paper')
 
-    for (const method of methodNodes) {
-      const sourcePaperIds = result.edges
-        .filter((edge) => edge.relationType === 'uses' && edge.targetId === method.id)
-        .map((edge) => edge.sourceId)
-        .sort()
-      const detail = result.nodeDetails[method.id]
-
-      expect([...method.sourcePaperIds].sort()).toEqual(sourcePaperIds)
-      expect(detail.nodeType).toBe('method')
-      if (detail.nodeType === 'method') {
-        expect([...detail.paperIds].sort()).toEqual(sourcePaperIds)
-      }
+    expect(result.contextOverlay.nodes.some((node) => node.nodeType === 'concept')).toBe(true)
+    expect(result.contextOverlay.nodes.some((node) => node.nodeType === 'method')).toBe(true)
+    expect(result.contextOverlay.edges.some((edge) => edge.relationType === 'paperConcept')).toBe(true)
+    expect(result.contextOverlay.edges.some((edge) => edge.relationType === 'paperMethod')).toBe(true)
+    for (const edge of result.contextOverlay.edges) {
+      expect(edge.sourcePaperIds).toContain(edge.sourceId)
     }
+    expect(result.nodeDetails['paper-001']).toMatchObject({
+      nodeType: 'paper',
+      conceptIds: expect.arrayContaining(['concept-reversal-learning']),
+      methodIds: expect.arrayContaining(['method-fmri']),
+    })
+  })
 
-    const paperNodes = result.nodes.filter((node) => node.nodeType === 'paper')
-    for (const paper of paperNodes) {
-      const methodIds = result.edges
-        .filter((edge) => edge.relationType === 'uses' && edge.sourceId === paper.id)
-        .map((edge) => edge.targetId)
-        .sort()
-      const detail = result.nodeDetails[paper.id]
+  it('方法关联边的来源论文是两个方法的共同论文', async () => {
+    const result = await getGraphDataset('method')
+    const methods = new Map(result.nodes.map((node) => [node.id, node]))
 
-      expect(detail.nodeType).toBe('paper')
-      if (detail.nodeType === 'paper') {
-        expect([...detail.methodIds].sort()).toEqual(methodIds)
-      }
+    for (const edge of result.edges) {
+      const source = methods.get(edge.sourceId)
+      const target = methods.get(edge.targetId)
+      const sharedPaperIds = source?.sourcePaperIds.filter((paperId) =>
+        target?.sourcePaperIds.includes(paperId),
+      ).sort()
+      expect(edge.sourcePaperIds).toEqual(sharedPaperIds)
     }
   })
 
@@ -200,12 +283,6 @@ describe('getGraphDataset', () => {
         }
       }
 
-      for (const edge of graph.contextOverlay.edges) {
-        expect(nodeIds.has(edge.sourceId)).toBe(true)
-        expect(allNodeIds.has(edge.targetId)).toBe(true)
-        expect(edge.sourcePaperIds.every((paperId) => graph.papers[paperId])).toBe(true)
-      }
-
       for (const evidence of graph.evidence) {
         expect(graph.papers[evidence.paperId]).toBeDefined()
         expect(referencedEvidenceIds.has(evidence.id)).toBe(true)
@@ -213,10 +290,27 @@ describe('getGraphDataset', () => {
     }
   })
 
-  it('作者合作边完整覆盖每篇多人论文的作者对，并保留独立作者', async () => {
-    const graph = await getGraphDataset('author')
+  it('核心作者仅由一作、共同一作和通讯作者身份决定', async () => {
+    const graph = await getGraphDataset('author', 'success', { authorMode: 'core' })
     const authorIdByName = new Map(graph.nodes.map((node) => [node.label, node.id]))
+    const explicitlyIncludedIds = new Set(
+      Object.values(graph.papers).flatMap((paper) => (paper.authors ?? [])
+        .filter((author) => author.order === 1 || author.contributionRoles.some((role) =>
+          ['firstAuthor', 'coFirstAuthor', 'correspondingAuthor'].includes(role)))
+        .map((author) => author.id)),
+    )
+    const legacyFirstAuthorNames = new Set(Object.values(graph.papers)
+      .filter((paper) => !paper.authors?.length)
+      .map((paper) => paper.authorNames[0])
+      .filter(Boolean))
     const expectedPairs = new Set<string>()
+
+    expect(graph.nodes.every((author) =>
+      explicitlyIncludedIds.has(author.id)
+      || legacyFirstAuthorNames.has(author.label),
+    )).toBe(true)
+    expect(authorIdByName.has('赵静')).toBe(true)
+    expect(authorIdByName.has('孙悦')).toBe(true)
 
     for (const paper of Object.values(graph.papers)) {
       const authorIds = paper.authorNames.flatMap((name) => {
@@ -248,10 +342,5 @@ describe('getGraphDataset', () => {
       expect(edge.weight).toBe(sharedPaperIds.length)
     }
 
-    expect(
-      graph.nodes.some((node) =>
-        graph.edges.every((edge) => edge.sourceId !== node.id && edge.targetId !== node.id),
-      ),
-    ).toBe(true)
   })
 })

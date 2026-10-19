@@ -24,6 +24,7 @@ export type GraphCanvasProps = {
   highlightedNodeIds: Set<string>
   isSearchActive: boolean
   contextConceptId: string | null
+  contextMethodId: string | null
   contextAuthorId: string | null
   showRelatedAuthors: boolean
   showRelatedConcepts: boolean
@@ -53,6 +54,7 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function Gra
     highlightedNodeIds,
     isSearchActive,
     contextConceptId,
+    contextMethodId,
     contextAuthorId,
     showRelatedAuthors,
     showRelatedConcepts,
@@ -73,6 +75,7 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function Gra
     highlightedNodeIds,
     isSearchActive,
     contextConceptId,
+    contextMethodId,
     contextAuthorId,
     showRelatedAuthors,
     showRelatedConcepts,
@@ -154,6 +157,7 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function Gra
       highlightedNodeIds,
       isSearchActive,
       contextConceptId,
+      contextMethodId,
       contextAuthorId,
       showRelatedAuthors,
       showRelatedConcepts,
@@ -173,6 +177,7 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function Gra
     chart.setOption(buildGraphPresentationOption(dataset, presentation))
   }, [
     contextConceptId,
+    contextMethodId,
     contextAuthorId,
     dataset,
     highlightedNodeIds,
@@ -199,6 +204,7 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function Gra
     highlightedNodeIds,
     isSearchActive,
     contextConceptId,
+    contextMethodId,
     contextAuthorId,
     showRelatedAuthors,
     showRelatedConcepts,

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .analysis_job_repository import serialize_job
 from .database import connect
+from .review_service import replace_previous_analysis_results
 from .schemas import (
     ANALYZED_RELATION_TYPES,
     METHOD_TYPES,
@@ -57,6 +58,56 @@ def _formal_node_type(connection: sqlite3.Connection, node_id: str) -> str | Non
     return row["node_type"] if row else None
 
 
+def _merge_json_list(raw: str, values: list[str]) -> str:
+    current = json.loads(raw)
+    return _json(list(dict.fromkeys([*current, *values])))
+
+
+def _upsert_graph_edge(
+    connection: sqlite3.Connection,
+    source_id: str,
+    source_type: str,
+    target_id: str,
+    target_type: str,
+    relation_type: str,
+    confidence: float | None,
+    evidence_ids: list[str],
+    source_paper_ids: list[str],
+) -> str:
+    existing = connection.execute(
+        """
+        SELECT id, source_paper_ids FROM graph_edges
+        WHERE source_id = ? AND target_id = ? AND relation_type = ?
+        """,
+        (source_id, target_id, relation_type),
+    ).fetchone()
+    if existing:
+        edge_id = existing["id"]
+        connection.execute(
+            "UPDATE graph_edges SET source_paper_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (_merge_json_list(existing["source_paper_ids"], source_paper_ids), edge_id),
+        )
+    else:
+        edge_id = _id()
+        connection.execute(
+            """
+            INSERT INTO graph_edges (
+                id, source_id, source_type, target_id, target_type, relation_type,
+                label, confidence, source_paper_ids
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                edge_id, source_id, source_type, target_id, target_type,
+                relation_type, relation_type, confidence, _json(source_paper_ids),
+            ),
+        )
+    connection.executemany(
+        "INSERT OR IGNORE INTO graph_edge_evidence (edge_id, evidence_id) VALUES (?, ?)",
+        [(edge_id, evidence_id) for evidence_id in evidence_ids],
+    )
+    return edge_id
+
+
 def _evidence_ids(connection: sqlite3.Connection, item_type: str, item_id: str) -> list[str]:
     rows = connection.execute(
         """
@@ -92,6 +143,10 @@ def _item_candidates(connection: sqlite3.Connection, owner_type: str, owner_id: 
 
 
 def _serialize_extraction(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    original = connection.execute(
+        "SELECT * FROM research_overview_originals WHERE extraction_id = ?",
+        (row["id"],),
+    ).fetchone()
     concepts = []
     for item in connection.execute(
         "SELECT * FROM extracted_concepts WHERE extraction_id = ? ORDER BY created_at, id",
@@ -170,6 +225,17 @@ def _serialize_extraction(connection: sqlite3.Connection, row: sqlite3.Row) -> d
             "sample": row["sample"],
             "methods": row["methods"],
             "mainResults": row["main_results"],
+            "original": (
+                {
+                    "researchTopics": json.loads(original["research_topics"]),
+                    "researchQuestion": original["research_question"],
+                    "sample": original["sample"],
+                    "methods": original["methods"],
+                    "mainResults": original["main_results"],
+                }
+                if original
+                else None
+            ),
         },
         "concepts": concepts,
         "methods": methods,
@@ -204,12 +270,44 @@ def _normalize_overview(payload: dict) -> dict:
         overview.get("researchTopics"), "researchOverview.researchTopics"
     )]
     ensure_unique(topics, "researchOverview.researchTopics")
+    original_value = overview.get("original")
+    original = None
+    if original_value is not None:
+        original_value = require_dict(original_value, "researchOverview.original")
+        original_topics = [
+            require_string(value, "researchOverview.original.researchTopics[]")
+            for value in require_list(
+                original_value.get("researchTopics"),
+                "researchOverview.original.researchTopics",
+            )
+        ]
+        ensure_unique(original_topics, "researchOverview.original.researchTopics")
+        original = {
+            "researchTopics": original_topics,
+            "researchQuestion": optional_string(
+                original_value.get("researchQuestion"),
+                "researchOverview.original.researchQuestion",
+            ),
+            "sample": optional_string(
+                original_value.get("sample"),
+                "researchOverview.original.sample",
+            ),
+            "methods": optional_string(
+                original_value.get("methods"),
+                "researchOverview.original.methods",
+            ),
+            "mainResults": optional_string(
+                original_value.get("mainResults"),
+                "researchOverview.original.mainResults",
+            ),
+        }
     return {
         "researchTopics": topics,
         "researchQuestion": optional_string(overview.get("researchQuestion"), "researchOverview.researchQuestion"),
         "sample": optional_string(overview.get("sample"), "researchOverview.sample"),
         "methods": optional_string(overview.get("methods"), "researchOverview.methods"),
         "mainResults": optional_string(overview.get("mainResults"), "researchOverview.mainResults"),
+        "original": original,
     }
 
 
@@ -230,6 +328,8 @@ def _normalize_submission(payload: dict) -> dict:
         evidence.append(
             {
                 "clientRef": client_ref,
+                # 跨论文候选关系可携带另一篇论文的原文证据；默认仍属于当前论文。
+                "paperId": optional_string(item.get("paperId"), f"evidence[{index}].paperId"),
                 "section": optional_string(item.get("section"), f"evidence[{index}].section"),
                 "text": require_string(item.get("text"), f"evidence[{index}].text"),
             }
@@ -310,6 +410,8 @@ def _normalize_submission(payload: dict) -> dict:
             }
         )
     ensure_unique(concept_refs, "concept.clientRef")
+    if len(concepts) > 6:
+        raise SchemaValidationError("每篇论文最多提交 6 个概念")
     result["concepts"] = concepts
 
     methods = []
@@ -339,6 +441,8 @@ def _normalize_submission(payload: dict) -> dict:
             }
         )
     ensure_unique(method_refs, "method.clientRef")
+    if len(methods) > 6:
+        raise SchemaValidationError("每篇论文最多提交 6 个方法")
     ensure_unique(candidate_refs, "candidate.clientRef")
     result["methods"] = methods
 
@@ -499,6 +603,7 @@ def submit_analysis_result(database_path: Path, job_id: str, payload: dict) -> t
             raise AnalysisResultError("JOB_NOT_ACCEPTING_RESULTS", "该任务不再接收分析结果", 409)
 
         with connection:
+            referenced_formal_node_ids: set[str] = set()
             for candidate_group, expected_type in (
                 (data["concepts"], "concept"),
                 (data["methods"], "method"),
@@ -517,6 +622,7 @@ def submit_analysis_result(database_path: Path, job_id: str, payload: dict) -> t
                                     422,
                                 )
                             candidate["label"] = row["label"]
+                            referenced_formal_node_ids.add(candidate["nodeId"])
 
             for relation in data["relationCandidates"]:
                 source = relation["source"]
@@ -535,28 +641,61 @@ def submit_analysis_result(database_path: Path, job_id: str, payload: dict) -> t
                     raise AnalysisResultError("INVALID_ANALYSIS_RESULT", "关系引用的正式节点不存在", 422)
                 if RELATION_ENDPOINTS[relation["relationType"]] != (source_type, target_type):
                     raise AnalysisResultError("INVALID_ANALYSIS_RESULT", "关系类型与端点类型不一致", 422)
+                for endpoint in (source, target):
+                    if endpoint["type"] == "formalNodeId" and connection.execute(
+                        "SELECT 1 FROM graph_nodes WHERE id = ?", (endpoint["value"],)
+                    ).fetchone():
+                        referenced_formal_node_ids.add(endpoint["value"])
 
-            connection.execute(
-                "UPDATE extractions SET is_latest = 0 WHERE paper_id = ? AND is_latest = 1",
-                (data["paperId"],),
-            )
-            connection.execute(
-                """
-                UPDATE suggestions
-                SET status = 'superseded', superseded_at = CURRENT_TIMESTAMP,
-                    reviewed_at = NULL, updated_at = CURRENT_TIMESTAMP
-                WHERE paper_id = ? AND status = 'pending'
-                """,
-                (data["paperId"],),
-            )
-            connection.execute(
-                """
-                UPDATE relation_candidates
-                SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
-                WHERE paper_id = ? AND status = 'pending'
-                """,
-                (data["paperId"],),
-            )
+            if job["result_mode"] == "replace":
+                preserved_nodes = []
+                if referenced_formal_node_ids:
+                    placeholders = ",".join("?" for _ in referenced_formal_node_ids)
+                    preserved_nodes = connection.execute(
+                        f"SELECT * FROM graph_nodes WHERE id IN ({placeholders})",
+                        list(referenced_formal_node_ids),
+                    ).fetchall()
+                replace_previous_analysis_results(connection, data["paperId"])
+                for node in preserved_nodes:
+                    source_ids = [
+                        value for value in json.loads(node["source_paper_ids"])
+                        if value != data["paperId"]
+                    ]
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO graph_nodes (
+                            id, node_type, label, description, method_type, aliases,
+                            source_paper_ids, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            node["id"], node["node_type"], node["label"],
+                            node["description"], node["method_type"], node["aliases"],
+                            _json(source_ids), node["created_at"], node["updated_at"],
+                        ),
+                    )
+            else:
+                connection.execute(
+                    "UPDATE extractions SET is_latest = 0 WHERE paper_id = ? AND is_latest = 1",
+                    (data["paperId"],),
+                )
+                connection.execute(
+                    """
+                    UPDATE suggestions
+                    SET status = 'superseded', superseded_at = CURRENT_TIMESTAMP,
+                        reviewed_at = NULL, updated_at = CURRENT_TIMESTAMP
+                    WHERE paper_id = ? AND status = 'pending'
+                    """,
+                    (data["paperId"],),
+                )
+                connection.execute(
+                    """
+                    UPDATE relation_candidates
+                    SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
+                    WHERE paper_id = ? AND status = 'pending'
+                    """,
+                    (data["paperId"],),
+                )
 
             extraction_id = _id()
             overview = data["researchOverview"]
@@ -579,6 +718,24 @@ def submit_analysis_result(database_path: Path, job_id: str, payload: dict) -> t
                     overview["mainResults"],
                 ),
             )
+            original = overview.get("original")
+            if original is not None:
+                connection.execute(
+                    """
+                    INSERT INTO research_overview_originals (
+                        extraction_id, research_topics, research_question,
+                        sample, methods, main_results
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        extraction_id,
+                        _json(original["researchTopics"]),
+                        original["researchQuestion"],
+                        original["sample"],
+                        original["methods"],
+                        original["mainResults"],
+                    ),
+                )
 
             evidence_map = {}
             for item in data["evidence"]:
@@ -592,7 +749,7 @@ def submit_analysis_result(database_path: Path, job_id: str, payload: dict) -> t
                     (
                         evidence_id,
                         extraction_id,
-                        data["paperId"],
+                        item["paperId"] or data["paperId"],
                         item["clientRef"],
                         item["section"],
                         item["text"],
@@ -751,6 +908,25 @@ def submit_analysis_result(database_path: Path, job_id: str, payload: dict) -> t
                     source, target = target, source
                 relation_id = _id()
                 evidence_ids = [evidence_map[ref] for ref in relation["evidenceRefs"]]
+                if (
+                    relation["relationType"] == "cites"
+                    and source["type"] == target["type"] == "formalNodeId"
+                ):
+                    if source["value"] != target["value"]:
+                        _upsert_graph_edge(
+                            connection,
+                            source["value"],
+                            "paper",
+                            target["value"],
+                            "paper",
+                            "cites",
+                            relation["confidence"],
+                            evidence_ids,
+                            [data["paperId"]],
+                        )
+                    # Citations are bibliographic facts and bypass the review
+                    # queue. Invalid self-citations are silently discarded.
+                    continue
                 connection.execute(
                     """
                     INSERT INTO relation_candidates (

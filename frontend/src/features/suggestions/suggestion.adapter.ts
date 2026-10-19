@@ -63,6 +63,7 @@ export function toSuggestionView(
     candidates,
     candidateState,
     canReview: dto.status === 'pending' && (!isResolve || candidateState === 'current'),
+    canReopen: dto.status === 'accepted' && latestExtraction?.id === dto.extractionId,
   }
 }
 

@@ -83,6 +83,7 @@ export type PaperAuthor = {
   displayName: string
   rawName: string
   authorOrder: number
+  contributionRoles?: Array<'firstAuthor' | 'coFirstAuthor' | 'correspondingAuthor'>
 }
 
 export type AuthorCollaboratorSummary = {
@@ -121,6 +122,15 @@ export type ResearchOverview = {
   sample: string | null
   methods: string | null
   mainResults: string | null
+  original?: ResearchOverviewOriginal | null
+}
+
+export type ResearchOverviewOriginal = {
+  researchTopics: string[]
+  researchQuestion: string | null
+  sample: string | null
+  methods: string | null
+  mainResults: string | null
 }
 
 export type PaperSummary = {
@@ -135,6 +145,8 @@ export type PaperSummary = {
   pendingSuggestionCount: number
   createdAt: string
   updatedAt: string
+  hasPdf?: boolean
+  zoteroCollections?: Array<{ key: string; name: string }>
 }
 
 export type PaperDetail = PaperSummary & {
@@ -257,6 +269,9 @@ export type RelationType =
   | 'contradicts'
   | 'relatedTo'
   | 'broaderThan'
+  | 'combinedWith'
+  | 'variantOf'
+  | 'alternativeTo'
   | 'cites'
 
 export type SuggestionOperation =
@@ -291,8 +306,10 @@ export type AddRelationChange = {
   type: 'addRelation'
   sourceId: string
   sourceType: GraphNodeType
+  sourceLabel?: string
   targetId: string
   targetType: GraphNodeType
+  targetLabel?: string
   relationType: RelationType
 }
 
@@ -402,6 +419,7 @@ export type GraphNode = {
   id: string
   nodeType: GraphNodeType
   label: string
+  englishLabel?: string | null
   description: string | null
   sourcePaperIds: string[]
   createdAt: string

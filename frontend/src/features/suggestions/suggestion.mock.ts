@@ -54,6 +54,7 @@ function suggestion(
 const evidence: Evidence[] = [
   { id: 'evidence-001', paperId: 'paper-001', section: 'Introduction', text: '反转学习将知识传授移至课前，并把课堂时间用于讨论与问题解决。' },
   { id: 'evidence-002', paperId: 'paper-001', section: 'Methods', text: '参与者完成包含四十次试次的行为任务，正确率和反应时间被同步记录。' },
+  { id: 'evidence-003', paperId: 'paper-001', section: 'Discussion', text: '在反馈规则发生变化后，认知灵活性较高的参与者能更快调整选择策略。' },
   { id: 'evidence-005', paperId: 'paper-003', section: 'Results', text: '与对照组相比，实验组的测验正确率提高了 12.4%。' },
   { id: 'evidence-006', paperId: 'paper-003', section: 'Methods', text: '神经群体活动被投影到低维状态空间，以比较不同记忆阶段的动力学轨迹。' },
   { id: 'evidence-accepted-001', paperId: 'paper-001', section: 'Results', text: '规则切换试次的平均反应时间显著长于规则重复试次。' },
@@ -75,6 +76,16 @@ export const suggestionPageDtoMock: SuggestionPageDto = {
       { confidence: 0.84 },
     ),
     suggestion(
+      'suggestion-003', 'paper-001', 'extraction-001', 'resolveConceptMatch', 'pending', '新增概念：认知灵活性', ['evidence-003'],
+      { type: 'resolveConceptMatch', extractedConceptId: 'extracted-concept-003', candidateIds: ['concept-existing-cognitive-flexibility', 'concept-new-adaptive-flexibility'], defaultCandidateId: 'concept-existing-cognitive-flexibility', maxSelections: 3 },
+      { confidence: 0.89 },
+    ),
+    suggestion(
+      'suggestion-004', 'paper-001', 'extraction-001', 'addRelation', 'pending', '概念关系：反转学习 ↔ 认知灵活性', ['evidence-001', 'evidence-003'],
+      { type: 'addRelation', sourceId: 'concept-flipped-classroom', sourceType: 'concept', sourceLabel: '反转学习', targetId: 'concept-cognitive-flexibility', targetType: 'concept', targetLabel: '认知灵活性', relationType: 'relatedTo' },
+      { confidence: 0.86 },
+    ),
+    suggestion(
       'suggestion-005', 'paper-003', 'extraction-003', 'addFinding', 'pending', '新增发现：学习成绩提升', ['evidence-005'],
       { type: 'addFinding', extractedFindingId: 'extracted-finding-005', statement: '反转学习组的测验正确率高于对照组' },
       { confidence: 0.88 },
@@ -91,7 +102,7 @@ export const suggestionPageDtoMock: SuggestionPageDto = {
     ),
     suggestion(
       'suggestion-rejected-001', 'paper-001', 'extraction-001', 'addRelation', 'rejected', '新增关系：前额叶活动与正确率相关', ['evidence-rejected-001'],
-      { type: 'addRelation', sourceId: 'concept-prefrontal-activity', sourceType: 'concept', targetId: 'concept-accuracy', targetType: 'concept', relationType: 'relatedTo' },
+      { type: 'addRelation', sourceId: 'concept-prefrontal-activity', sourceType: 'concept', sourceLabel: '前额叶活动', targetId: 'concept-accuracy', targetType: 'concept', targetLabel: '正确率', relationType: 'relatedTo' },
       { confidence: 0.61, reviewedAt: '2026-08-28T09:30:00Z', reviewComment: '证据不足，相关结果未通过多重比较校正' },
     ),
     suggestion(
@@ -108,23 +119,38 @@ export const suggestionPageDtoMock: SuggestionPageDto = {
     { id: 'paper-001', title: '反转学习中的认知灵活性与前额叶活动' },
     { id: 'paper-003', title: '适应性决策的脑电标记' },
   ],
-  statusCounts: { pending: 4, accepted: 1, rejected: 1, superseded: 1 },
+  statusCounts: { pending: 6, accepted: 1, rejected: 1, superseded: 1 },
 }
 
 /** 模拟公开 latest Extraction 端点；候选详情只存在于此池。 */
 export const extractionDtoMocks: Record<string, ExtractionDto> = {
   'paper-001': {
     id: 'extraction-001', paperId: 'paper-001', analysisJobId: 'job-001', isLatest: true,
-    researchOverview: { researchTopics: ['反转学习'], researchQuestion: null, sample: null, methods: '行为任务', mainResults: null },
-    concepts: [{
-      id: 'extracted-concept-001', paperId: 'paper-001', rawText: '反转学习', normalizedLabel: '反转学习', matchStatus: 'uncertain', matchedConceptIds: [], extractionConfidence: 0.91, evidenceIds: ['evidence-001'],
-      candidates: [
-        { id: 'concept-existing-flipped-classroom', kind: 'existing', nodeId: 'concept-flipped-classroom', label: '翻转课堂', recommendationScore: 0.86 },
-        { id: 'concept-existing-blended-learning', kind: 'existing', nodeId: 'concept-blended-learning', label: '混合学习', recommendationScore: 0.63 },
-        { id: 'concept-new-inverted-learning', kind: 'new', nodeId: null, label: '反转学习', recommendationScore: 0.72 },
-        { id: 'concept-existing-classroom-teaching', kind: 'existing', nodeId: 'concept-classroom-teaching', label: '课堂教学', recommendationScore: 0.41 },
-      ],
-    }],
+    researchOverview: {
+      researchTopics: ['反转学习'],
+      researchQuestion: '反馈相关神经信号能否预测规则变化后的行为调整？',
+      sample: '参与者完成规则切换任务。',
+      methods: '行为任务',
+      mainResults: '反馈相关负波幅度可预测规则切换后的行为调整。',
+    },
+    concepts: [
+      {
+        id: 'extracted-concept-001', paperId: 'paper-001', rawText: '反转学习', normalizedLabel: '反转学习', matchStatus: 'uncertain', matchedConceptIds: [], extractionConfidence: 0.91, evidenceIds: ['evidence-001'],
+        candidates: [
+          { id: 'concept-existing-flipped-classroom', kind: 'existing', nodeId: 'concept-flipped-classroom', label: '翻转课堂', recommendationScore: 0.86 },
+          { id: 'concept-existing-blended-learning', kind: 'existing', nodeId: 'concept-blended-learning', label: '混合学习', recommendationScore: 0.63 },
+          { id: 'concept-new-inverted-learning', kind: 'new', nodeId: null, label: '反转学习', recommendationScore: 0.72 },
+          { id: 'concept-existing-classroom-teaching', kind: 'existing', nodeId: 'concept-classroom-teaching', label: '课堂教学', recommendationScore: 0.41 },
+        ],
+      },
+      {
+        id: 'extracted-concept-003', paperId: 'paper-001', rawText: '认知灵活性', normalizedLabel: '认知灵活性', matchStatus: 'uncertain', matchedConceptIds: [], extractionConfidence: 0.89, evidenceIds: ['evidence-003'],
+        candidates: [
+          { id: 'concept-existing-cognitive-flexibility', kind: 'existing', nodeId: 'concept-cognitive-flexibility', label: '认知灵活性', recommendationScore: 0.9 },
+          { id: 'concept-new-adaptive-flexibility', kind: 'new', nodeId: null, label: '适应性认知灵活性', recommendationScore: 0.68 },
+        ],
+      },
+    ],
     methods: [{
       id: 'extracted-method-001', paperId: 'paper-001', rawText: '行为任务', normalizedLabel: '行为任务', methodType: 'behavioralTask', description: null, matchStatus: 'uncertain', matchedMethodIds: [], extractionConfidence: 0.84, evidenceIds: ['evidence-002'],
       candidates: [

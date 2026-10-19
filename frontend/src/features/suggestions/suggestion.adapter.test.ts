@@ -57,6 +57,7 @@ describe('toSuggestionPageView', () => {
     const page = toSuggestionPageView(suggestionPageDto, { 'paper-1': latestExtractionDto })
     expect(page.items[2].candidates).toEqual([])
     expect(page.items[2].candidateState).toBe('history')
+    expect(page.items[2].canReopen).toBe(false)
     expect(page.items[2].executionResult).toEqual(suggestionPageDto.items[2].executionResult)
     expect(page.items[1]).toMatchObject({ candidateState: 'staleExtraction', canReview: false })
   })

@@ -36,6 +36,7 @@ export type Suggestion = Omit<SuggestionDto, 'evidenceIds' | 'proposedChange' | 
   candidates: ResolutionCandidate[]
   candidateState: SuggestionCandidateState
   canReview: boolean
+  canReopen: boolean
   proposedChange: ProposedChange
   executionResult: SuggestionExecutionResult | null
 }

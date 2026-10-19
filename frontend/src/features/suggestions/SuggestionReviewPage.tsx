@@ -139,7 +139,21 @@ export default function SuggestionReviewPage({
     try {
       await service.rejectSuggestion(suggestion.id, reason)
       await refreshPage()
-      setNotice('审核成功。')
+      setNotice(suggestion.status === 'accepted' ? '已撤销采纳并改为拒绝。' : '审核成功。')
+    } catch (error) {
+      showReviewError(error)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function reopenOne(suggestion: Suggestion) {
+    setBusyId(suggestion.id)
+    setNotice(null)
+    try {
+      await service.reopenSuggestion(suggestion.id)
+      await refreshPage()
+      setNotice('已撤销采纳并重新加入待审核。')
     } catch (error) {
       showReviewError(error)
     } finally {
@@ -238,7 +252,8 @@ export default function SuggestionReviewPage({
                   key={group.paperId}
                   onToggle={() => togglePaper(group.paperId)}
                   onAccept={activeStatus === 'pending' ? acceptOne : undefined}
-                  onReject={activeStatus === 'pending' ? rejectOne : undefined}
+                  onReject={activeStatus === 'pending' || activeStatus === 'accepted' ? rejectOne : undefined}
+                  onReopen={activeStatus === 'accepted' ? reopenOne : undefined}
                   onReviewMany={
                     activeStatus === 'pending' ? requestBatchReview : undefined
                   }

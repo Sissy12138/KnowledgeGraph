@@ -28,6 +28,10 @@ const sharedPapers: Record<string, GraphPaperSummary> = {
     id: 'paper-003',
     title: '适应性决策的脑电标记',
     authorNames: ['陈伟', '赵静'],
+    authors: [
+      { id: 'author-chen-wei', name: '陈伟', order: 1, contributionRoles: ['firstAuthor'] },
+      { id: 'author-zhao-jing', name: '赵静', order: 2, contributionRoles: ['coFirstAuthor'] },
+    ],
     year: 2023,
     journal: { name: 'Cerebral Cortex', impactFactor: 4.2, impactFactorYear: 2024, jcrQuartile: 'Q2' },
   },
@@ -35,6 +39,10 @@ const sharedPapers: Record<string, GraphPaperSummary> = {
     id: 'paper-004',
     title: '人类层级强化学习',
     authorNames: ['周宁', '孙悦'],
+    authors: [
+      { id: 'author-zhou-ning', name: '周宁', order: 1, contributionRoles: ['firstAuthor'] },
+      { id: 'author-sun-yue', name: '孙悦', order: 2, contributionRoles: ['correspondingAuthor'] },
+    ],
     year: 2022,
     journal: { name: 'PLOS Computational Biology', impactFactor: 4.3, impactFactorYear: 2024, jcrQuartile: 'Q1' },
   },
@@ -152,17 +160,21 @@ function buildAuthorContextEdges(
   )
 }
 
-/** 从论文 ID 与概念的论文外键生成文献—概念上下文边。 */
-function buildPaperContextEdges(papers: Record<string, GraphPaperSummary>): GraphEdge[] {
+/** 从论文 ID 与概念/方法的论文外键生成可追溯上下文边。 */
+function buildPaperContextEdges(
+  papers: Record<string, GraphPaperSummary>,
+  contextNodes: GraphNode[],
+  relationType: 'paperConcept' | 'paperMethod',
+): GraphEdge[] {
   return Object.values(papers).flatMap((paper) =>
-    conceptNodes
-      .filter((concept) => concept.sourcePaperIds.includes(paper.id))
-      .map((concept) => ({
-        id: `edge-context-${paper.id}-${concept.id}`,
+    contextNodes
+      .filter((contextNode) => contextNode.sourcePaperIds.includes(paper.id))
+      .map((contextNode) => ({
+        id: `edge-context-${paper.id}-${contextNode.id}`,
         sourceId: paper.id,
-        targetId: concept.id,
-        relationType: 'paperConcept' as const,
-        label: '相关概念',
+        targetId: contextNode.id,
+        relationType,
+        label: relationType === 'paperConcept' ? '相关概念' : '相关方法',
         directed: false,
         weight: null,
         evidenceIds: [],
@@ -294,7 +306,25 @@ export const methodGraphMock: GraphDataset = withDerivedMetrics({
     { id: 'edge-paper-model-rl', sourceId: 'paper-004', targetId: 'method-rl-model', relationType: 'uses', label: '使用', directed: true, weight: null, evidenceIds: [], sourcePaperIds: ['paper-004'] },
     { id: 'edge-paper-preprint-network', sourceId: 'paper-005', targetId: 'method-network-analysis', relationType: 'uses', label: '使用', directed: true, weight: null, evidenceIds: [], sourcePaperIds: ['paper-005'] },
   ],
-  contextOverlay: { nodes: [], edges: [] },
+  contextOverlay: {
+    nodes: conceptNodes,
+    edges: methodNodes.flatMap((method) => conceptNodes.flatMap((concept) => {
+      const conceptPaperIds = new Set(concept.sourcePaperIds)
+      const sourcePaperIds = method.sourcePaperIds.filter((paperId) => conceptPaperIds.has(paperId))
+      if (sourcePaperIds.length === 0) return []
+      return [{
+        id: `edge-context-${method.id}-${concept.id}`,
+        sourceId: method.id,
+        targetId: concept.id,
+        relationType: 'methodConcept' as const,
+        label: '相关概念',
+        directed: false,
+        weight: sourcePaperIds.length,
+        evidenceIds: [],
+        sourcePaperIds,
+      }]
+    })),
+  },
   evidence: methodEvidence,
   papers: sharedPapers,
   relatedNodeLabels: sharedNodeLabels,
@@ -308,6 +338,9 @@ export const methodGraphMock: GraphDataset = withDerivedMetrics({
     'method-fmri': { nodeId: 'method-fmri', nodeType: 'method', methodType: '神经影像', paperIds: ['paper-001'] },
     'method-eeg': { nodeId: 'method-eeg', nodeType: 'method', methodType: '电生理', paperIds: ['paper-003'] },
     'method-network-analysis': { nodeId: 'method-network-analysis', nodeType: 'method', methodType: '网络科学', paperIds: ['paper-002', 'paper-005'] },
+    ...Object.fromEntries(
+      conceptNodes.map((node) => [node.id, conceptGraphMock.nodeDetails[node.id]]),
+    ),
   },
 })
 
@@ -355,8 +388,11 @@ export const paperGraphMock: GraphDataset = withDerivedMetrics({
     { id: 'edge-paper-eeg-model', sourceId: 'paper-003', targetId: 'paper-004', relationType: 'cites', label: '引用', directed: true, weight: null, evidenceIds: [], sourcePaperIds: ['paper-003'] },
   ],
   contextOverlay: {
-    nodes: conceptNodes,
-    edges: buildPaperContextEdges(sharedPapers),
+    nodes: [...conceptNodes, ...methodNodes],
+    edges: [
+      ...buildPaperContextEdges(sharedPapers, conceptNodes, 'paperConcept'),
+      ...buildPaperContextEdges(sharedPapers, methodNodes, 'paperMethod'),
+    ],
   },
   evidence: paperEvidence,
   papers: sharedPapers,
@@ -364,6 +400,9 @@ export const paperGraphMock: GraphDataset = withDerivedMetrics({
   nodeDetails: {
     ...Object.fromEntries(
       conceptNodes.map((node) => [node.id, conceptGraphMock.nodeDetails[node.id]]),
+    ),
+    ...Object.fromEntries(
+      methodNodes.map((node) => [node.id, methodGraphMock.nodeDetails[node.id]]),
     ),
     'paper-001': { nodeId: 'paper-001', nodeType: 'paper', paperId: 'paper-001', conceptIds: ['concept-reversal-learning', 'concept-cognitive-control'], methodIds: ['method-fmri'], findingSummaries: ['反转阶段的认知控制信号增强。'] },
     'paper-002': { nodeId: 'paper-002', nodeType: 'paper', paperId: 'paper-002', conceptIds: ['concept-reversal-learning', 'concept-value-updating'], methodIds: ['method-rl-model', 'method-network-analysis'], findingSummaries: ['网络状态反映价值更新。'] },

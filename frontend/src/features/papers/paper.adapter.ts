@@ -71,6 +71,12 @@ export function toPaperDetailView(
       ? {
           ...dto.researchOverview,
           researchTopics: [...dto.researchOverview.researchTopics],
+          original: dto.researchOverview.original
+            ? {
+                ...dto.researchOverview.original,
+                researchTopics: [...dto.researchOverview.original.researchTopics],
+              }
+            : null,
         }
       : null,
   }

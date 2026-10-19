@@ -18,7 +18,7 @@ cd D:\Projects\AI
 首次运行或依赖变化后执行：
 
 ```powershell
-python -m pip install -r backend\requirements.txt
+python -m pip install -r backend-a/requirements.txt
 ```
 
 ### 3. 启动 Zotero

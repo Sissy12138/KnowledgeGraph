@@ -76,6 +76,33 @@ describe('suggestion service v05 transport', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: null }),
     })
   })
+
+  it('posts an accepted suggestion to the reopen endpoint', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const acceptedDto = suggestionPageDtoMock.items.find((item) => item.id === 'suggestion-accepted-001')
+    if (!acceptedDto) throw new Error('fixture missing')
+    const reopenedDto: SuggestionDto = {
+      ...acceptedDto,
+      status: 'pending',
+      executionResult: null,
+      reviewedAt: null,
+      reviewComment: null,
+      updatedAt: '2026-08-29T10:35:00Z',
+    }
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(reopenedDto), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetcher)
+    const service = createSuggestionService()
+    service.prime(suggestionPageDtoMock, extractionDtoMocks)
+
+    const reopened = await service.reopenSuggestion(acceptedDto.id)
+
+    expect(reopened.status).toBe('pending')
+    expect(fetcher).toHaveBeenCalledWith(`/api/v1/suggestions/${acceptedDto.id}/reopen`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    })
+  })
 })
 
 describe('mock suggestion service', () => {
@@ -83,7 +110,7 @@ describe('mock suggestion service', () => {
     const page = await createMockSuggestionService().listSuggestions('pending')
     expect(page.papers).not.toHaveLength(0)
     expect(page.evidence).not.toHaveLength(0)
-    expect(page.statusCounts).toEqual({ pending: 4, accepted: 1, rejected: 1, superseded: 1 })
+    expect(page.statusCounts).toEqual({ pending: 6, accepted: 1, rejected: 1, superseded: 1 })
     expect(page.items.every((item) => item.status === 'pending')).toBe(true)
   })
 

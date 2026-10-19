@@ -1,7 +1,47 @@
-import { describe, expect, it } from 'vitest'
-import { createMockAnalysisJobLoader } from './analysis-job.service'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  createMockAnalysisJobLoader,
+  deleteAnalysisJob,
+  listAnalysisJobs,
+  loadAnalysisJob,
+  rerunAnalysisJob,
+} from './analysis-job.service'
 
 describe('createMockAnalysisJobLoader', () => {
+  it('API 模式从 A 获取任务状态', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: 'job-api', paperId: 'paper-api', status: 'processing', progress: 42, stage: 'analyzing', error: null,
+      createdAt: '', startedAt: '', completedAt: null,
+    }), { status: 200 })))
+    await expect(loadAnalysisJob('job-api')).resolves.toMatchObject({ id: 'job-api', progress: 42 })
+    expect(fetch).toHaveBeenCalledWith('/api/v1/analysis-jobs/job-api', undefined)
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('列表、重新执行和删除记录调用对应接口', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'new-job' }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ deletedJobId: 'old-job' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetcher)
+
+    await expect(listAnalysisJobs()).resolves.toEqual([])
+    await rerunAnalysisJob('paper/a', 'replace')
+    await deleteAnalysisJob('old/job')
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/api/v1/analysis-jobs?limit=100', undefined)
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/v1/papers/paper%2Fa/analysis-jobs', {
+      method: 'POST', body: JSON.stringify({ resultMode: 'replace' }),
+    })
+    expect(fetcher).toHaveBeenNthCalledWith(3, '/api/v1/analysis-jobs/old%2Fjob', {
+      method: 'DELETE',
+    })
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
   it('处理中的任务进度单调递增并最终完成', async () => {
     const loadJob = createMockAnalysisJobLoader()
 

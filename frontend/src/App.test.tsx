@@ -47,6 +47,13 @@ describe('App', () => {
       }),
     ).toBeInTheDocument()
     expect(screen.getByText('反馈相关神经信号能否预测规则变化后的行为调整？')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { name: '分析结果' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('无 14 块总量上限')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: '反转学习 ↔ 认知灵活性' }),
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole('link', { name: /返回论文库/ }))
 
@@ -60,7 +67,7 @@ describe('App', () => {
       screen.getByRole('heading', { name: '建议审核' }),
     ).toBeInTheDocument()
     expect(
-      await screen.findByRole('tab', { name: '待审核 4' }),
+      await screen.findByRole('tab', { name: '待审核 6' }),
     ).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '建议审核' })).toHaveAttribute(
       'aria-current',
@@ -72,7 +79,9 @@ describe('App', () => {
     renderApp('/graph')
 
     expect(screen.getByRole('heading', { name: '知识图谱' })).toBeInTheDocument()
-    expect(await screen.findByText('概念网络')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('tab', { name: '概念关系' }),
+    ).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('link', { name: '知识图谱' })).toHaveAttribute(
       'aria-current',
       'page',

@@ -1,7 +1,10 @@
 import json
+import unicodedata
 from pathlib import Path
 
-from httpx import ConnectError
+from httpx import HTTPError
+from pyzotero.errors import HTTPError as ZoteroHTTPError
+from pyzotero.errors import UserNotAuthorisedError
 
 from .database import connect, import_papers
 from .models import PaperRecord, ZoteroCollectionRecord
@@ -92,13 +95,23 @@ def _open_client():
     return create_local_client()
 
 
+def _normalized_title(title: str | None) -> str:
+    """Return a comparison key that ignores case, spacing, and punctuation."""
+    if not title:
+        return ""
+    normalized = unicodedata.normalize("NFKC", title).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
 def get_zotero_status() -> dict:
     client = _open_client()
     try:
         client.top(limit=1)
         return {"connected": True}
-    except ConnectError:
-        return {"connected": False}
+    except (HTTPError, ZoteroHTTPError, UserNotAuthorisedError) as error:
+        raise ZoteroImportError(
+            503, "ZOTERO_UNAVAILABLE", "无法连接 Zotero 本地接口"
+        ) from error
     finally:
         client.client.close()
 
@@ -125,7 +138,7 @@ def list_zotero_collections(database_path: Path) -> dict:
             _collection_summary(value)
             for value in client.everything(client.collections())
         ]
-    except ConnectError as error:
+    except (HTTPError, ZoteroHTTPError, UserNotAuthorisedError) as error:
         raise ZoteroImportError(
             503, "ZOTERO_UNAVAILABLE", "无法连接 Zotero 本地接口"
         ) from error
@@ -197,7 +210,7 @@ def _read_selected_papers(
             if paper is not None:
                 papers.append(paper)
         return papers, found_count, collection_records
-    except ConnectError as error:
+    except (HTTPError, ZoteroHTTPError, UserNotAuthorisedError) as error:
         raise ZoteroImportError(
             503, "ZOTERO_UNAVAILABLE", "无法连接 Zotero 本地接口"
         ) from error
@@ -207,13 +220,17 @@ def _read_selected_papers(
 
 def _classify(database_path: Path, papers: list[PaperRecord], found_count: int) -> dict:
     connection = connect(database_path)
+    existing = connection.execute(
+        "SELECT id, doi, title FROM papers ORDER BY created_at, id"
+    ).fetchall()
     created_count = 0
     updated_count = 0
     unchanged_count = 0
+    items = []
     for paper in papers:
         row = connection.execute(
             """
-            SELECT source_updated_at
+            SELECT id, source_updated_at
             FROM papers
             WHERE source_type = 'zotero'
               AND source_library_id = ?
@@ -223,10 +240,52 @@ def _classify(database_path: Path, papers: list[PaperRecord], found_count: int) 
         ).fetchone()
         if row is None:
             created_count += 1
-        elif row[0] != paper.source_updated_at:
+            action = "created"
+        elif row[1] != paper.source_updated_at:
             updated_count += 1
+            action = "updated"
         else:
             unchanged_count += 1
+            action = "unchanged"
+        title_key = _normalized_title(paper.title)
+        duplicate = next(
+            (
+                candidate
+                for candidate in existing
+                if candidate[0] != (row[0] if row else paper.id)
+                and (
+                    (
+                        bool(paper.doi)
+                        and paper.doi.casefold() == (candidate[1] or "").casefold()
+                    )
+                    or (
+                        bool(title_key)
+                        and title_key == _normalized_title(candidate[2])
+                    )
+                )
+            ),
+            None,
+        )
+        duplicate_by_doi = bool(
+            duplicate
+            and paper.doi
+            and paper.doi.casefold() == (duplicate[1] or "").casefold()
+        )
+        items.append(
+            {
+                "paperId": row[0] if row else paper.id,
+                "title": paper.title,
+                "action": action,
+                "hasPdf": bool(paper.attachments),
+                "localPdfAvailable": any(
+                    Path(attachment.path).is_file() for attachment in paper.attachments
+                ),
+                "duplicateOfPaperId": duplicate[0] if duplicate else None,
+                "duplicateReason": (
+                    "同 DOI" if duplicate_by_doi else ("同标题" if duplicate else None)
+                ),
+            }
+        )
     connection.close()
     return {
         "foundCount": found_count,
@@ -237,6 +296,7 @@ def _classify(database_path: Path, papers: list[PaperRecord], found_count: int) 
         "withPdfCount": sum(bool(paper.attachments) for paper in papers),
         "missingPdfCount": sum(not paper.attachments for paper in papers),
         "skippedCount": found_count - len(papers),
+        "items": items,
     }
 
 

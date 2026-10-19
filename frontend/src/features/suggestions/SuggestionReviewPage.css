@@ -100,6 +100,7 @@
 .paper-review-group__actions,
 .suggestion-type-section__actions,
 .suggestion-card__buttons,
+.suggestion-card__reconsider-actions,
 .batch-review-dialog__buttons,
 .suggestion-card__result {
   display: flex;
@@ -396,6 +397,68 @@ button.resolution-candidate:disabled {
   margin: 0 0 14px;
 }
 
+.relation-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  margin: 10px 0 14px;
+  padding: 14px;
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-card);
+}
+
+.relation-preview__node {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 11px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.relation-preview__node span {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.relation-preview__node strong {
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.relation-preview__connector {
+  display: grid;
+  place-content: center;
+  min-width: 86px;
+  color: var(--color-primary-deep);
+  text-align: center;
+}
+
+.relation-preview__connector span {
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.relation-preview__connector b {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.relation-preview__warning {
+  margin: -4px 0 14px;
+  padding: 9px 11px;
+  color: var(--color-danger-foreground);
+  font-size: 0.8rem;
+  background: var(--color-danger-background);
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-control);
+}
+
 .suggestion-card__meta {
   display: flex;
   gap: 32px;
@@ -490,6 +553,19 @@ button.resolution-candidate:disabled {
   color: var(--color-danger-foreground);
   background: var(--color-surface);
   border: 1px solid var(--color-danger-border);
+}
+
+.suggestion-card__reconsider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.review-button--reopen {
+  color: var(--color-primary-deep);
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary-border);
 }
 
 .batch-action:disabled,
@@ -627,6 +703,18 @@ button.resolution-candidate:disabled {
 
   .suggestion-card__buttons {
     justify-content: flex-end;
+  }
+
+  .relation-preview {
+    grid-template-columns: 1fr;
+  }
+
+  .relation-preview__connector {
+    min-width: 0;
+  }
+
+  .relation-preview__connector b {
+    transform: rotate(90deg);
   }
 }
 

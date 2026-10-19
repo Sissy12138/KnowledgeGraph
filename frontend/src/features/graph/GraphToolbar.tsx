@@ -1,8 +1,11 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
-import type { GraphNode, GraphView } from './graph.types'
+import type { GraphCollection, GraphNode, GraphView } from './graph.types'
 
 type GraphToolbarProps = {
   view: GraphView
+  language: 'zh' | 'en'
+  collectionKey: string | null
+  collections: GraphCollection[]
   query: string
   searchResults: GraphNode[]
   onViewChange: (view: GraphView) => void
@@ -10,6 +13,8 @@ type GraphToolbarProps = {
   onResultSelect: (nodeId: string) => void
   onFit: () => void
   onReset: () => void
+  onLanguageChange: (language: 'zh' | 'en') => void
+  onCollectionChange: (collectionKey: string | null) => void
 }
 
 const graphViews: Array<{ value: GraphView; label: string }> = [
@@ -22,6 +27,9 @@ const graphViews: Array<{ value: GraphView; label: string }> = [
 /** 提供网络视图切换、节点搜索和画布控制操作。 */
 export default function GraphToolbar({
   view,
+  language,
+  collectionKey,
+  collections,
   query,
   searchResults,
   onViewChange,
@@ -29,6 +37,8 @@ export default function GraphToolbar({
   onResultSelect,
   onFit,
   onReset,
+  onLanguageChange,
+  onCollectionChange,
 }: GraphToolbarProps) {
   const [activeResultIndex, setActiveResultIndex] = useState(0)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -108,16 +118,43 @@ export default function GraphToolbar({
         ))}
       </div>
 
+      <label className="graph-toolbar__scope">
+        <span className="graph-toolbar__scope-label">
+          <span aria-hidden="true">📁</span>
+          文献范围
+        </span>
+        <select
+          aria-label="图谱文献范围"
+          title="按 Zotero 文件夹筛选图谱"
+          onChange={(event) => onCollectionChange(event.target.value || null)}
+          value={collectionKey ?? ''}
+        >
+          <option value="">全部文件夹</option>
+          {collections.map((collection) => (
+            <option key={collection.key} value={collection.key}>
+              {collection.name}（{collection.paperCount}）
+            </option>
+          ))}
+        </select>
+      </label>
+
       <div className="graph-toolbar__search">
-        <input
-          aria-label="搜索当前网络中的节点"
-          onChange={(event) => {
-            setActiveResultIndex(0)
-            onQueryChange(event.target.value)
-          }}
-          type="search"
-          value={query}
-        />
+        <label className="graph-toolbar__search-control">
+          <span className="graph-toolbar__search-label">
+            <span aria-hidden="true">🔍</span>
+            搜索节点
+          </span>
+          <input
+            aria-label="搜索当前网络中的节点"
+            onChange={(event) => {
+              setActiveResultIndex(0)
+              onQueryChange(event.target.value)
+            }}
+            placeholder="输入节点名称"
+            type="search"
+            value={query}
+          />
+        </label>
         {query.trim() !== '' && (
           <ul
             aria-activedescendant={searchResults.length > 0
@@ -155,6 +192,22 @@ export default function GraphToolbar({
       </div>
 
       <div className="graph-toolbar__actions">
+        <div className="graph-toolbar__language" aria-label="图谱语言">
+          <button
+            aria-pressed={language === 'zh'}
+            onClick={() => onLanguageChange('zh')}
+            type="button"
+          >
+            中文
+          </button>
+          <button
+            aria-pressed={language === 'en'}
+            onClick={() => onLanguageChange('en')}
+            type="button"
+          >
+            English
+          </button>
+        </div>
         <button onClick={onFit} type="button">适应画布</button>
         <button onClick={onReset} type="button">重置</button>
       </div>

@@ -45,11 +45,18 @@ describe('GraphOverlayControls', () => {
     const user = userEvent.setup()
     const onConceptsChange = vi.fn()
     const onMethodsChange = vi.fn()
+    const onAuthorModeChange = vi.fn()
+    const onExpandedSelectedAuthorChange = vi.fn()
     render(
       <GraphOverlayControls
         view="author"
+        authorMode="coreBridge"
+        canExpandSelectedAuthor
+        expandedSelectedAuthor={false}
         showRelatedConcepts={false}
         showRelatedMethods={false}
+        onAuthorModeChange={onAuthorModeChange}
+        onExpandedSelectedAuthorChange={onExpandedSelectedAuthorChange}
         onShowRelatedConceptsChange={onConceptsChange}
         onShowRelatedMethodsChange={onMethodsChange}
       />,
@@ -60,22 +67,48 @@ describe('GraphOverlayControls', () => {
     expect(onConceptsChange).toHaveBeenCalledWith(true)
     expect(onMethodsChange).toHaveBeenCalledWith(true)
     expect(screen.queryByRole('button', { name: '显示相关作者' })).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByRole('combobox', { name: '作者网络范围' }), 'all')
+    await user.click(screen.getByRole('button', { name: '展开当前作者全部合作者' }))
+    expect(onAuthorModeChange).toHaveBeenCalledWith('all')
+    expect(onExpandedSelectedAuthorChange).toHaveBeenCalledWith(true)
   })
 
-  it('文献引用视图只提供相关概念开关', async () => {
+  it('方法视图提供相关概念开关', async () => {
     const user = userEvent.setup()
     const onConceptsChange = vi.fn()
+    render(
+      <GraphOverlayControls
+        view="method"
+        showRelatedConcepts={false}
+        onShowRelatedConceptsChange={onConceptsChange}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: '显示相关概念' }))
+    expect(onConceptsChange).toHaveBeenCalledWith(true)
+  })
+
+  it('文献引用视图提供相关概念和相关方法开关', async () => {
+    const user = userEvent.setup()
+    const onConceptsChange = vi.fn()
+    const onMethodsChange = vi.fn()
     const paperProps = {
       view: 'paper' as const,
       showRelatedConcepts: false,
+      showRelatedMethods: false,
       onShowRelatedConceptsChange: onConceptsChange,
+      onShowRelatedMethodsChange: onMethodsChange,
     }
     render(<GraphOverlayControls {...paperProps} />)
 
     const concepts = screen.getByRole('button', { name: '显示相关概念' })
+    const methods = screen.getByRole('button', { name: '显示相关方法' })
     expect(concepts).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.queryByRole('button', { name: '显示相关方法' })).not.toBeInTheDocument()
+    expect(methods).toHaveAttribute('aria-pressed', 'false')
     await user.click(concepts)
+    await user.click(methods)
     expect(onConceptsChange).toHaveBeenCalledWith(true)
+    expect(onMethodsChange).toHaveBeenCalledWith(true)
   })
 })

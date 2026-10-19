@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { getPapers } from './paper.service'
+import { Link, useNavigate } from 'react-router-dom'
+import { createNewPaperAnalysisJobs, getPapers, type NewPaperAnalysisBatch } from './paper.service'
+import { requestJson } from '../../contracts/api-client'
 import type { PaperPage, PaperStatus, PaperSummary } from './paper.types'
 import './PaperListPage.css'
 
 type PaperListPageProps = {
   loadPapers?: () => Promise<PaperPage>
+  startNewAnalyses?: () => Promise<NewPaperAnalysisBatch>
 }
 
 type ViewState =
@@ -25,8 +27,13 @@ const statusLabels: Record<PaperStatus, string> = {
 /** 展示论文分页数据，并覆盖加载、成功、空态和失败四种状态。 */
 export default function PaperListPage({
   loadPapers = getPapers,
+  startNewAnalyses = createNewPaperAnalysisJobs,
 }: PaperListPageProps) {
+  const navigate = useNavigate()
   const [viewState, setViewState] = useState<ViewState>({ status: 'loading' })
+  const [refresh, setRefresh] = useState(0)
+  const [isStartingNewAnalyses, setIsStartingNewAnalyses] = useState(false)
+  const [analysisMessage, setAnalysisMessage] = useState('')
 
   useEffect(() => {
     let isActive = true
@@ -45,7 +52,24 @@ export default function PaperListPage({
     return () => {
       isActive = false
     }
-  }, [loadPapers])
+  }, [loadPapers, refresh])
+
+  async function startNewPaperAnalyses() {
+    setIsStartingNewAnalyses(true)
+    setAnalysisMessage('')
+    try {
+      const result = await startNewAnalyses()
+      if (result.createdCount === 0) {
+        setAnalysisMessage('没有待分析的新导入论文。')
+        return
+      }
+      navigate('/analysis-jobs')
+    } catch (error) {
+      setAnalysisMessage(error instanceof Error ? error.message : '无法创建分析任务。')
+    } finally {
+      setIsStartingNewAnalyses(false)
+    }
+  }
 
   return (
     <section className="paper-list-page" aria-labelledby="paper-list-title">
@@ -54,6 +78,16 @@ export default function PaperListPage({
           <p className="paper-list-page__eyebrow">RESEARCH LIBRARY</p>
           <h1 id="paper-list-title">论文库</h1>
           <p>查看论文的解析状态和待审核知识建议。</p>
+        </div>
+        <div className="paper-list-page__actions">
+          <button
+            type="button"
+            onClick={() => void startNewPaperAnalyses()}
+            disabled={isStartingNewAnalyses || viewState.status === 'loading'}
+          >
+            {isStartingNewAnalyses ? '正在创建分析任务…' : '一键分析新导入文献'}
+          </button>
+          {analysisMessage && <p role="status">{analysisMessage}</p>}
         </div>
       </header>
 
@@ -84,7 +118,7 @@ export default function PaperListPage({
           </p>
           <div className="paper-grid">
             {viewState.data.items.map((paper) => (
-              <PaperCard key={paper.id} paper={paper} />
+              <PaperCard key={paper.id} paper={paper} onRemoved={() => setRefresh((value) => value + 1)} />
             ))}
           </div>
         </>
@@ -93,7 +127,7 @@ export default function PaperListPage({
   )
 }
 
-function PaperCard({ paper }: { paper: PaperSummary }) {
+function PaperCard({ paper, onRemoved }: { paper: PaperSummary; onRemoved: () => void }) {
   const authors = paper.authors.length
     ? paper.authors.map((author) => author.name).join('、')
     : '作者信息缺失'
@@ -101,7 +135,20 @@ function PaperCard({ paper }: { paper: PaperSummary }) {
     paper.metricSource === 'mock'
     && paper.journal?.impactFactor != null
 
+  async function removeFromLibrary() {
+    await requestJson(`/api/v1/papers/${encodeURIComponent(paper.id)}`, { method: 'DELETE' })
+    onRemoved()
+  }
+
   return (
+    <div
+      className="paper-card-link"
+      onContextMenu={(event) => {
+        event.preventDefault()
+        const confirmed = window.confirm(`操作：从研知图移除“${paper.title}”？\n\n点击“确定”后将删除本地记录，但不会修改 Zotero。`)
+        if (confirmed) void removeFromLibrary()
+      }}
+    >
     <Link
       aria-label={`查看论文详情：${paper.title}`}
       className="paper-card-link"
@@ -136,5 +183,6 @@ function PaperCard({ paper }: { paper: PaperSummary }) {
         </div>
       </article>
     </Link>
+    </div>
   )
 }

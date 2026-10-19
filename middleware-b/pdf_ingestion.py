@@ -226,8 +226,9 @@ class PdfPaperParser:
         doi = PdfPaperParser._doi(first_page) or PdfPaperParser._doi("\n".join(page for page in pages[:3]))
         abstract = next((section.text for section in sections if section.name.casefold() == "abstract"), None)
         abstract = abstract or PdfPaperParser._abstract_from_first_page(first_page)
+        keywords = PdfPaperParser._keywords("\n".join(pages[:2]))
         year = PdfPaperParser._year(document_metadata.get("/CreationDate")) or PdfPaperParser._year(first_page)
-        return {"title": title, "authors": authors, "year": year, "doi": doi, "abstract": abstract}
+        return {"title": title, "authors": authors, "year": year, "doi": doi, "abstract": abstract, "keywords": keywords}
 
     @staticmethod
     def _valid_metadata_string(value: object) -> str | None:
@@ -268,6 +269,18 @@ class PdfPaperParser:
             return None
         abstract = re.sub(r"\s+", " ", match.group(1)).strip()
         return abstract or None
+
+    @staticmethod
+    def _keywords(front_matter: str) -> list[str]:
+        match = re.search(
+            r"(?im)^\s*(?:key\s*words?|keywords?|index\s+terms?)\s*[:—–-]\s*(.+(?:\n(?!\s*(?:\d+(?:\.\d+)*\s+)?[A-Z][A-Za-z &/-]{2,80}\s*$).+)?)",
+            front_matter,
+        )
+        if not match:
+            return []
+        raw = re.sub(r"\s+", " ", match.group(1)).strip()
+        values = [value.strip(" .") for value in re.split(r"\s*[;,|·]\s*", raw) if value.strip(" .")]
+        return values[:30]
 
     @staticmethod
     def _authors(metadata_author: object, first_page: str) -> list[str]:

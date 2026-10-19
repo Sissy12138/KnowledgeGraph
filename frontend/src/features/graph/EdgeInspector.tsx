@@ -30,6 +30,12 @@ export function EdgeInspector({ dataset, edgeId }: EdgeInspectorProps) {
           <p>{`共同论文：${edge.weight ?? EMPTY_VALUE} 篇`}</p>
           <PaperLinks papers={papers} />
         </>
+      ) : edge.relationType === 'coOccurs' ? (
+        <>
+          <p><strong>判定状态：</strong>待语义判断；同篇出现不等于已确认概念关系。</p>
+          <p>{`共同论文：${edge.weight ?? EMPTY_VALUE} 篇`}</p>
+          <PaperLinks papers={papers} />
+        </>
       ) : (
         <>
           <h3>来源论文</h3>

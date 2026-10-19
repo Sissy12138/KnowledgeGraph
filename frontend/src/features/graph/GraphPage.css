@@ -31,6 +31,7 @@
 
 .graph-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 16px;
   margin-bottom: 18px;
@@ -40,11 +41,71 @@
   border-radius: var(--radius-card);
 }
 
+.graph-toolbar__scope {
+  display: flex;
+  flex: 1 1 190px;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 0 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.graph-toolbar__scope:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.graph-toolbar__scope-label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.graph-toolbar__scope select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 38px;
+  padding: 7px 26px 7px 2px;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  font-size: 0.84rem;
+}
+
 .graph-toolbar__tabs,
 .graph-toolbar__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.graph-toolbar__language {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.graph-toolbar__language button {
+  padding: 5px 9px;
+  border: 0;
+}
+
+.graph-toolbar__language button[aria-pressed='true'] {
+  color: var(--color-on-primary);
+  background: var(--color-primary);
 }
 
 .graph-toolbar__tab,
@@ -66,14 +127,49 @@
 
 .graph-toolbar__search {
   position: relative;
-  flex: 1 1 240px;
+  flex: 2 1 220px;
+  min-width: 0;
+}
+
+.graph-toolbar__search-control {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 0 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.graph-toolbar__search-control:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.graph-toolbar__search-label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .graph-toolbar__search input {
+  min-width: 90px;
   width: 100%;
-  padding: 9px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-control);
+  padding: 9px 2px;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.graph-toolbar__search input::placeholder {
+  color: var(--color-text-muted);
 }
 
 .graph-toolbar__results {
@@ -142,6 +238,30 @@
   border-radius: var(--radius-control);
   box-shadow: var(--shadow-card);
   cursor: pointer;
+}
+
+.graph-overlay-controls__select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  color: var(--color-text);
+  font-size: 0.8125rem;
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-card);
+}
+
+.graph-overlay-controls__select select {
+  color: inherit;
+  background: var(--color-surface);
+  border: 0;
+}
+
+.graph-overlay-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .graph-overlay-controls button[aria-pressed="true"] {

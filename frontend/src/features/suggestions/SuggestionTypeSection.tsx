@@ -11,6 +11,7 @@ type SuggestionTypeSectionProps = {
     labelOverrides: Record<string, string>,
   ) => Promise<void>
   onReject?: (suggestion: Suggestion, reason: string | null) => Promise<void>
+  onReopen?: (suggestion: Suggestion) => Promise<void>
 }
 
 /** 显示论文内的一种 v05 operation，并为空类别保留明确占位。 */
@@ -19,6 +20,7 @@ export default function SuggestionTypeSection({
   busyId = null,
   onAccept,
   onReject,
+  onReopen,
 }: SuggestionTypeSectionProps) {
   return (
     <section className="suggestion-type-section" aria-label={`${category.label}模块`}>
@@ -35,6 +37,7 @@ export default function SuggestionTypeSection({
               key={suggestion.id}
               onAccept={onAccept}
               onReject={onReject}
+              onReopen={onReopen}
               suggestion={suggestion}
             />
           ))}

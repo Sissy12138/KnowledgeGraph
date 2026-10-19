@@ -101,6 +101,8 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
     progress INTEGER NOT NULL DEFAULT 0
         CHECK (progress BETWEEN 0 AND 100),
     stage TEXT NOT NULL,
+    result_mode TEXT NOT NULL DEFAULT 'preserve'
+        CHECK (result_mode IN ('preserve', 'replace')),
     previous_paper_status TEXT NOT NULL,
     error_code TEXT,
     error_message TEXT,
@@ -128,6 +130,17 @@ CREATE TABLE IF NOT EXISTS extractions (
     methods TEXT,
     main_results TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 保留研究概览每个字段的英文原文，与中文忠实翻译分离存储。
+-- 独立表可以无损升级现有 SQLite 数据库。
+CREATE TABLE IF NOT EXISTS research_overview_originals (
+    extraction_id TEXT PRIMARY KEY REFERENCES extractions(id) ON DELETE CASCADE,
+    research_topics TEXT NOT NULL DEFAULT '[]',
+    research_question TEXT,
+    sample TEXT,
+    methods TEXT,
+    main_results TEXT
 );
 
 CREATE TABLE IF NOT EXISTS evidence (

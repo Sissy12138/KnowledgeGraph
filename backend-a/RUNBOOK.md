@@ -23,7 +23,7 @@ python -c "import sys; print(sys.executable)"
 4. 安装依赖：
 
 ```powershell
-python -m pip install -r backend\requirements.txt
+python -m pip install -r backend-a/requirements.txt
 ```
 
 5. 启动 Zotero 桌面软件并保持运行：
@@ -94,7 +94,7 @@ http://127.0.0.1:8000/api/v1/papers
 python -m pip show pyzotero
 ```
 
-`backend/requirements.txt` 会从项目内的 `pyzotero-main/` 安装 Pyzotero，不会把 Python 包安装进 Zotero 软件本体。
+`backend-a/requirements.txt` 会安装 Pyzotero，不会把 Python 包安装进 Zotero 软件本体。
 
 ### 2. Zotero 导入
 
@@ -170,6 +170,7 @@ GET /api/v1/papers?page=1&pageSize=20
 GET /api/v1/papers/{paperId}
 POST /api/v1/papers/{paperId}/analysis-jobs
 GET /api/v1/analysis-jobs/{jobId}
+GET /api/v1/analysis-jobs?status=queued&limit=20
 POST /api/v1/analysis-jobs/{jobId}/cancel
 POST /api/v1/internal/analysis-jobs/{jobId}/result
 GET /api/v1/papers/{paperId}/extractions/latest
@@ -226,7 +227,7 @@ curl.exe -s http://127.0.0.1:23119/connector/ping
 ```powershell
 conda activate zotero
 cd D:\Projects\AI
-python -m pip install -r backend\requirements.txt
+python -m pip install -r backend-a/requirements.txt
 ```
 
 ### 浏览器只显示大量文字

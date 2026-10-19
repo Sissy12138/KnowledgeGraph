@@ -1,17 +1,29 @@
 import argparse
 import json
+import ssl
+import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from pathlib import Path
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
+import certifi
+
 from .analysis_job_repository import (
     ActiveJobError,
     JobNotCancellableError,
+    JobNotDeletableError,
     JobNotFoundError,
     PaperNotFoundError,
     cancel_job,
+    create_jobs_for_new_papers,
+    fail_job,
     create_job,
+    delete_job,
     get_job,
+    list_jobs,
+    update_job_progress,
 )
 from .analysis_service import (
     AnalysisResultError,
@@ -28,13 +40,19 @@ from .graph_service import (
     list_formal_nodes,
     match_node_candidates,
 )
-from .paper_repository import get_paper, list_papers
+from .paper_repository import get_author, get_paper, list_papers, remove_paper
+from .model_config import clear_config, configure_storage, private_dict, public_status, set_config
+from .model_providers import build_test_request, list_providers
+from .qa_service import QuestionAnswerError, answer_question
 from .review_service import (
     ReviewError,
     accept_suggestion,
+    apply_unreviewed_citations,
     get_suggestion_detail,
     list_suggestions,
+    reconcile_rejected_entity_relations,
     reject_suggestion,
+    reopen_suggestion,
 )
 from .zotero_import_service import (
     ZoteroImportError,
@@ -110,8 +128,34 @@ def _query(environ) -> dict[str, list[str]]:
     return parse_qs(environ.get("QUERY_STRING", ""))
 
 
+def _model_test_error(error: Exception) -> tuple[str, str, dict, bool]:
+    """Turn provider failures into messages a local user can act on.
+
+    The provider response body is deliberately not returned: it may contain
+    request metadata, while a concise status-specific explanation is enough
+    for local troubleshooting.
+    """
+    if isinstance(error, HTTPError):
+        status = error.code
+        if status in {401, 403}:
+            return ("MODEL_AUTH_FAILED", "API Key 无效、已撤销，或没有该模型的访问权限。", {"providerStatus": status}, False)
+        if status == 404:
+            return ("MODEL_NOT_FOUND", "所选模型或兼容 API 地址不存在。请重新选择服务商和模型。", {"providerStatus": status}, False)
+        if status == 429:
+            return ("MODEL_RATE_OR_QUOTA_LIMIT", "服务商拒绝了请求：可能是余额不足、账单未启用，或暂时触发了速率限制。", {"providerStatus": status}, True)
+        return ("MODEL_PROVIDER_ERROR", f"模型服务返回 HTTP {status}。请稍后重试，或检查该服务商控制台。", {"providerStatus": status}, status >= 500)
+    if isinstance(error, URLError):
+        return ("MODEL_NETWORK_ERROR", "无法连接模型服务。请检查网络、代理或服务商地址。", {}, True)
+    if isinstance(error, ValueError):
+        return ("MODEL_NOT_CONFIGURED", str(error), {}, False)
+    return ("MODEL_TEST_FAILED", "模型连接测试失败。请检查配置后重试。", {}, True)
+
+
 def create_app(database_path: Path, zotero_root: Path | None = None):
     zotero_root = zotero_root or Path.home() / "Zotero"
+    configure_storage(database_path.with_name("model-config.json"))
+    apply_unreviewed_citations(database_path)
+    reconcile_rejected_entity_relations(database_path)
 
     def app(environ, start_response):
         method = environ["REQUEST_METHOD"]
@@ -122,13 +166,64 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
                 "204 No Content",
                 [
                     ("Access-Control-Allow-Origin", "*"),
-                    ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+                    ("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
                     ("Access-Control-Allow-Headers", "Content-Type"),
                 ],
             )
             return [b""]
 
         try:
+            if method == "GET" and path == "/healthz":
+                return _json(start_response, "200 OK", {"status": "ok", "service": "backend-a"})
+
+            if method == "GET" and path == "/api/v1/model-config":
+                return _json(start_response, "200 OK", public_status())
+            if method == "GET" and path == "/api/v1/model-providers":
+                return _json(start_response, "200 OK", list_providers())
+            if method == "POST" and path == "/api/v1/model-config":
+                try:
+                    return _json(start_response, "200 OK", set_config(_read_json(environ)))
+                except ValueError as error:
+                    return _error(start_response, "400 Bad Request", "INVALID_MODEL_CONFIG", str(error))
+            if method == "DELETE" and path == "/api/v1/model-config":
+                clear_config()
+                return _json(start_response, "200 OK", public_status())
+
+            if method == "GET" and path == "/api/v1/internal/model-config":
+                try:
+                    return _json(start_response, "200 OK", private_dict())
+                except ValueError as error:
+                    return _error(start_response, "409 Conflict", "MODEL_NOT_CONFIGURED", str(error))
+            if method == "POST" and path == "/api/v1/model-config/test":
+                try:
+                    config = private_dict()
+                    started = time.monotonic()
+                    request = build_test_request(config)
+                    context = ssl.create_default_context(cafile=certifi.where())
+                    with urlopen(request, timeout=30, context=context) as response:
+                        response.read()
+                    return _json(start_response, "200 OK", {"ok": True, "latencyMs": round((time.monotonic() - started) * 1000), "model": config["model"]})
+                except Exception as error:
+                    code, message, details, retryable = _model_test_error(error)
+                    return _error(start_response, "502 Bad Gateway", code, message, details, retryable)
+
+            if method == "POST" and path == "/api/v1/qa":
+                try:
+                    config = private_dict()
+                except ValueError:
+                    return _error(
+                        start_response,
+                        "409 Conflict",
+                        "MODEL_NOT_CONFIGURED",
+                        "请先在模型配置页面保存并测试 API Key，再使用知识问答。",
+                    )
+                body = _read_json(environ)
+                return _json(
+                    start_response,
+                    "200 OK",
+                    answer_question(database_path, config, body.get("question"), body.get("history")),
+                )
+
             if method == "GET" and path == "/api/v1/zotero/status":
                 return _json(start_response, "200 OK", get_zotero_status())
 
@@ -170,6 +265,16 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
                     int(query.get("pageSize", ["20"])[0]),
                 )
                 return _json(start_response, "200 OK", result)
+
+            author_prefix = "/api/v1/authors/"
+            if method == "GET" and path.startswith(author_prefix):
+                author_id = path.removeprefix(author_prefix)
+                if not author_id or "/" in author_id:
+                    return _error(start_response, "404 Not Found", "AUTHOR_NOT_FOUND", "未找到指定作者")
+                author = get_author(database_path, author_id)
+                if not author:
+                    return _error(start_response, "404 Not Found", "AUTHOR_NOT_FOUND", "未找到指定作者")
+                return _json(start_response, "200 OK", author)
 
             concept_prefix = "/api/v1/concepts/"
             if method == "GET" and path.startswith(concept_prefix):
@@ -215,8 +320,16 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
             paper_job_suffix = "/analysis-jobs"
             if method == "POST" and path.startswith("/api/v1/papers/") and path.endswith(paper_job_suffix):
                 paper_id = path.removeprefix("/api/v1/papers/").removesuffix(paper_job_suffix).rstrip("/")
+                if not public_status()["configured"]:
+                    return _error(
+                        start_response,
+                        "409 Conflict",
+                        "MODEL_NOT_CONFIGURED",
+                        "请先在模型配置页面填写并测试 API Key，再开始分析。",
+                    )
                 try:
-                    job = create_job(database_path, paper_id)
+                    body = _read_json(environ)
+                    job = create_job(database_path, paper_id, body.get("resultMode", "preserve"))
                 except PaperNotFoundError:
                     return _error(start_response, "404 Not Found", "PAPER_NOT_FOUND", "未找到指定论文")
                 except ActiveJobError as error:
@@ -235,7 +348,33 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
                 result, created = submit_analysis_result(database_path, job_id, _read_json(environ))
                 return _json(start_response, "201 Created" if created else "200 OK", result)
 
+            if method == "POST" and path.startswith("/api/v1/internal/analysis-jobs/") and path.endswith("/progress"):
+                job_id = path.removeprefix("/api/v1/internal/analysis-jobs/").removesuffix("/progress").rstrip("/")
+                body = _read_json(environ)
+                return _json(start_response, "200 OK", update_job_progress(database_path, job_id, body.get("progress"), body.get("stage")))
+
+            if method == "POST" and path.startswith("/api/v1/internal/analysis-jobs/") and path.endswith("/failed"):
+                job_id = path.removeprefix("/api/v1/internal/analysis-jobs/").removesuffix("/failed").rstrip("/")
+                body = _read_json(environ)
+                return _json(start_response, "200 OK", fail_job(database_path, job_id, str(body.get("code", "WORKER_ERROR")), str(body.get("message", "Worker failed"))))
+
             job_prefix = "/api/v1/analysis-jobs/"
+            if method == "GET" and path == "/api/v1/analysis-jobs":
+                query = _query(environ)
+                return _json(start_response, "200 OK", list_jobs(
+                    database_path,
+                    query.get("status", [None])[0],
+                    int(query.get("limit", ["20"])[0]),
+                ))
+            if method == "POST" and path == "/api/v1/analysis-jobs/analyze-new":
+                if not public_status()["configured"]:
+                    return _error(
+                        start_response,
+                        "409 Conflict",
+                        "MODEL_NOT_CONFIGURED",
+                        "请先在模型配置页面填写并测试 API Key，再开始批量分析。",
+                    )
+                return _json(start_response, "201 Created", create_jobs_for_new_papers(database_path))
             if path.startswith(job_prefix):
                 remainder = path.removeprefix(job_prefix)
                 is_cancel = remainder.endswith("/cancel")
@@ -243,6 +382,8 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
                 try:
                     if method == "POST" and is_cancel:
                         return _json(start_response, "200 OK", cancel_job(database_path, job_id))
+                    if method == "DELETE" and not is_cancel and "/" not in job_id:
+                        return _json(start_response, "200 OK", delete_job(database_path, job_id))
                     if method == "GET" and not is_cancel and "/" not in job_id:
                         return _json(start_response, "200 OK", get_job(database_path, job_id))
                 except JobNotFoundError:
@@ -253,6 +394,13 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
                         "409 Conflict",
                         "JOB_NOT_CANCELLABLE",
                         "该任务已经结束，不能取消",
+                    )
+                except JobNotDeletableError:
+                    return _error(
+                        start_response,
+                        "409 Conflict",
+                        "JOB_NOT_DELETABLE",
+                        "只有同篇论文已有成功任务时，才能删除失败或已取消的任务记录",
                     )
 
             latest_suffix = "/extractions/latest"
@@ -294,6 +442,13 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
                         "200 OK",
                         reject_suggestion(database_path, suggestion_id, _read_json(environ)),
                     )
+                if method == "POST" and remainder.endswith("/reopen"):
+                    suggestion_id = remainder.removesuffix("/reopen")
+                    return _json(
+                        start_response,
+                        "200 OK",
+                        reopen_suggestion(database_path, suggestion_id),
+                    )
                 if method == "GET" and "/" not in remainder:
                     return _json(start_response, "200 OK", get_suggestion_detail(database_path, remainder))
 
@@ -301,7 +456,7 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
                 query = _query(environ)
                 focus_node_id = query.get("focusNodeId", [None])[0]
                 if not focus_node_id:
-                    raise GraphQueryError("focusNodeId 必填")
+                    return _json(start_response, "200 OK", get_graph(database_path))
                 try:
                     depth = int(query.get("depth", ["2"])[0])
                     max_nodes = int(query.get("maxNodes", ["30"])[0])
@@ -316,6 +471,12 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
                 return _json(start_response, "200 OK", result)
 
             paper_prefix = "/api/v1/papers/"
+            if method == "DELETE" and path.startswith(paper_prefix):
+                paper_id = path.removeprefix(paper_prefix)
+                if not paper_id or "/" in paper_id or not remove_paper(database_path, paper_id):
+                    return _error(start_response, "404 Not Found", "PAPER_NOT_FOUND", "未找到指定论文")
+                return _json(start_response, "200 OK", {"deleted": True, "paperId": paper_id})
+
             if method == "GET" and path.startswith(paper_prefix):
                 paper_id = path.removeprefix(paper_prefix)
                 if not paper_id or "/" in paper_id:
@@ -354,6 +515,9 @@ def create_app(database_path: Path, zotero_root: Path | None = None):
             return _error(start_response, "404 Not Found", "GRAPH_NODE_NOT_FOUND", "未找到中心节点")
         except GraphQueryError as error:
             return _error(start_response, "400 Bad Request", "INVALID_GRAPH_QUERY", str(error))
+        except QuestionAnswerError as error:
+            status = "400 Bad Request" if error.code == "INVALID_QUESTION" else "502 Bad Gateway"
+            return _error(start_response, status, error.code, str(error), retryable=error.retryable)
         except (TypeError, ValueError) as error:
             return _error(start_response, "400 Bad Request", "INVALID_REQUEST", str(error))
 

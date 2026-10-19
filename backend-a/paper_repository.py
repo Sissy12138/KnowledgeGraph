@@ -31,7 +31,7 @@ def _utc(value: str | None) -> str | None:
 def _authors(connection: sqlite3.Connection, paper_id: str) -> list[dict]:
     rows = connection.execute(
         """
-        SELECT a.id, a.name, pa.position
+        SELECT a.id, a.name, pa.position, pa.role
         FROM paper_authors pa
         JOIN authors a ON a.id = pa.author_id
         WHERE pa.paper_id = ?
@@ -39,15 +39,30 @@ def _authors(connection: sqlite3.Connection, paper_id: str) -> list[dict]:
         """,
         (paper_id,),
     ).fetchall()
-    return [
-        {
-            "authorId": row["id"],
-            "displayName": row["name"],
-            "rawName": row["name"],
-            "authorOrder": row["position"] + 1,
-        }
-        for row in rows
-    ]
+    authors: dict[str, dict] = {}
+    for row in rows:
+        author = authors.setdefault(
+            row["id"],
+            {
+                "authorId": row["id"],
+                "displayName": row["name"],
+                "rawName": row["name"],
+                "authorOrder": row["position"] + 1,
+                "contributionRoles": [],
+            },
+        )
+        author["authorOrder"] = min(author["authorOrder"], row["position"] + 1)
+        normalized_role = "".join(character for character in row["role"].casefold() if character.isalnum())
+        if normalized_role in {"cofirstauthor", "equalcontribution", "jointfirstauthor"}:
+            author["contributionRoles"].append("coFirstAuthor")
+        if normalized_role in {"correspondingauthor", "correspondenceauthor"}:
+            author["contributionRoles"].append("correspondingAuthor")
+
+    for author in authors.values():
+        if author["authorOrder"] == 1:
+            author["contributionRoles"].insert(0, "firstAuthor")
+        author["contributionRoles"] = list(dict.fromkeys(author["contributionRoles"]))
+    return sorted(authors.values(), key=lambda author: (author["authorOrder"], author["authorId"]))
 
 
 def _journal(row: sqlite3.Row) -> dict | None:
@@ -170,6 +185,14 @@ def get_paper(database_path: Path, paper_id: str) -> dict | None:
         """,
         (paper_id,),
     ).fetchone()
+    overview_original = (
+        connection.execute(
+            "SELECT * FROM research_overview_originals WHERE extraction_id = ?",
+            (extraction["id"],),
+        ).fetchone()
+        if extraction
+        else None
+    )
     paper.update(
         {
             "abstract": row["abstract"],
@@ -186,11 +209,66 @@ def get_paper(database_path: Path, paper_id: str) -> dict | None:
                     "sample": extraction["sample"],
                     "methods": extraction["methods"],
                     "mainResults": extraction["main_results"],
+                    "original": (
+                        {
+                            "researchTopics": json.loads(overview_original["research_topics"]),
+                            "researchQuestion": overview_original["research_question"],
+                            "sample": overview_original["sample"],
+                            "methods": overview_original["methods"],
+                            "mainResults": overview_original["main_results"],
+                        }
+                        if overview_original
+                        else None
+                    ),
                 }
                 if extraction
                 else None
             ),
+            "attachments": [
+                {"id": attachment["id"], "path": attachment["path"], "contentType": attachment["content_type"]}
+                for attachment in connection.execute(
+                    "SELECT id, path, content_type FROM paper_attachments WHERE paper_id = ? ORDER BY id",
+                    (paper_id,),
+                ).fetchall()
+            ],
         }
     )
     connection.close()
     return paper
+
+
+def get_author(database_path: Path, author_id: str) -> dict | None:
+    connection = connect(database_path)
+    connection.row_factory = sqlite3.Row
+    row = connection.execute("SELECT * FROM authors WHERE id = ?", (author_id,)).fetchone()
+    if not row:
+        connection.close()
+        return None
+    paper_count = connection.execute(
+        "SELECT COUNT(*) FROM paper_authors WHERE author_id = ?", (author_id,)
+    ).fetchone()[0]
+    result = {
+        "id": row["id"],
+        "displayName": row["name"],
+        "nameVariants": [row["name"]],
+        "externalIds": {
+            "orcid": row["orcid"],
+            "orcidSource": "zotero" if row["orcid"] else None,
+            "orcidAuthenticated": False,
+        },
+        "affiliations": [],
+        "identityStatus": "provisional",
+        "mergedIntoAuthorId": None,
+        "paperCount": paper_count,
+        "createdAt": _utc(row["created_at"]),
+        "updatedAt": _utc(row["updated_at"]),
+    }
+    connection.close()
+    return result
+
+def remove_paper(database_path: Path, paper_id: str) -> bool:
+    connection = connect(database_path)
+    cursor = connection.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
+    connection.commit()
+    connection.close()
+    return cursor.rowcount > 0

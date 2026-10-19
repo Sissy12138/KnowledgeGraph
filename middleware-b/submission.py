@@ -22,6 +22,7 @@ METHOD_TYPES = {
 }
 RELATION_TYPES = {
     "supports", "contradicts", "relatedTo", "broaderThan", "cites",
+    "combinedWith", "variantOf", "alternativeTo",
 }
 
 
@@ -185,13 +186,28 @@ def validate_submission_payload(payload: dict[str, object]) -> None:
     if set(payload) != expected or not all(isinstance(payload[key], str) and payload[key] for key in ("submissionId", "paperId")):
         raise SubmissionError("invalid top-level BAnalysisResultSubmission")
     overview = payload["researchOverview"]
-    if not isinstance(overview, dict) or set(overview) != {"researchTopics", "researchQuestion", "sample", "methods", "mainResults"}:
+    if not isinstance(overview, dict) or not set(overview) <= {
+        "researchTopics", "researchQuestion", "sample", "methods", "mainResults", "original"
+    } or not {"researchTopics", "researchQuestion", "sample", "methods", "mainResults"} <= set(overview):
         raise SubmissionError("invalid ResearchOverview")
     if not isinstance(overview["researchTopics"], list) or not all(isinstance(value, str) for value in overview["researchTopics"]):
         raise SubmissionError("researchTopics must be a string array")
     for key in ("researchQuestion", "sample", "methods", "mainResults"):
         if overview[key] is not None and not isinstance(overview[key], str):
             raise SubmissionError(f"researchOverview.{key} must be string or null")
+    original = overview.get("original")
+    if original is not None:
+        if not isinstance(original, dict) or set(original) != {
+            "researchTopics", "researchQuestion", "sample", "methods", "mainResults"
+        }:
+            raise SubmissionError("invalid researchOverview.original")
+        if not isinstance(original["researchTopics"], list) or not all(
+            isinstance(value, str) and value for value in original["researchTopics"]
+        ):
+            raise SubmissionError("researchOverview.original.researchTopics must be strings")
+        for key in ("researchQuestion", "sample", "methods", "mainResults"):
+            if original[key] is not None and not isinstance(original[key], str):
+                raise SubmissionError(f"researchOverview.original.{key} must be string or null")
     evidence = _as_list(payload["evidence"], "evidence")
     evidence_refs = set()
     for item in evidence:
@@ -208,8 +224,12 @@ def validate_submission_payload(payload: dict[str, object]) -> None:
     finding_refs: set[str] = set()
     for item in _as_list(payload["concepts"], "concepts"):
         _validate_entity(item, "concept", evidence_refs, all_client_refs, candidate_refs)
+    if len(_as_list(payload["concepts"], "concepts")) > 6:
+        raise SubmissionError("concepts must contain at most 6 items per paper")
     for item in _as_list(payload["methods"], "methods"):
         _validate_entity(item, "method", evidence_refs, all_client_refs, candidate_refs)
+    if len(_as_list(payload["methods"], "methods")) > 6:
+        raise SubmissionError("methods must contain at most 6 items per paper")
     for item in _as_list(payload["findings"], "findings"):
         _require_exact(item, {"clientRef", "statement", "confidence", "evidenceRefs"}, "finding")
         _validate_client_ref(item, all_client_refs, "finding")

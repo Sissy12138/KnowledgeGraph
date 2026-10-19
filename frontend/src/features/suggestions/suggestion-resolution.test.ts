@@ -18,7 +18,7 @@ function makeSuggestion(overrides: Partial<Suggestion> = {}): Suggestion {
       { id: 'new-1', kind: 'new', nodeId: null, label: 'New label', recommendationScore: 0.1 },
       { id: 'new-2', kind: 'new', nodeId: null, label: 'Another new', recommendationScore: null },
     ],
-    candidateState: 'current', canReview: true,
+    candidateState: 'current', canReview: true, canReopen: false,
     proposedChange: { type: 'resolveConceptMatch', extractedConceptId: 'concept-extracted-1', candidateIds: ['existing-1', 'existing-2', 'new-1', 'new-2'], defaultCandidateId: 'new-1', maxSelections: 3 },
     executionResult: null, reviewedAt: null, supersededAt: null, reviewComment: null,
     createdAt: '2026-08-26T09:00:00Z', updatedAt: '2026-08-26T09:00:00Z',

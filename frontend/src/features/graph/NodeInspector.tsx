@@ -66,6 +66,11 @@ function ConceptDetail({ dataset, node, detail }: { dataset: GraphDataset; node:
       <EntityList dataset={dataset} label="上位概念" ids={detail.broaderConceptIds} />
       <EntityList dataset={dataset} label="下位概念" ids={detail.narrowerConceptIds} />
       <EntityList dataset={dataset} label="相关概念" ids={detail.relatedConceptIds} />
+      <EntityList
+        dataset={dataset}
+        label="同篇共现（待语义判断）"
+        ids={detail.coOccurringConceptIds ?? []}
+      />
       <label>
         关联论文排序
         <select value={sortBy} onChange={(event) => setSortBy(event.target.value as GraphPaperSort)}>
@@ -96,10 +101,27 @@ function AuthorDetail({ dataset, node, detail }: { dataset: GraphDataset; node: 
   const collaborations = dataset.edges.filter(
     (edge) => edge.relationType === 'coAuthor' && (edge.sourceId === node.id || edge.targetId === node.id),
   )
+  const visibleCollaboratorNames = new Set(collaborations.flatMap((edge) => {
+    const collaboratorId = edge.sourceId === node.id ? edge.targetId : edge.sourceId
+    const collaborator = dataset.nodes.find((item) => item.id === collaboratorId)
+    return collaborator ? [collaborator.label] : []
+  }))
+  const hiddenCollaboratorNames = [...new Set(detail.paperIds.flatMap((paperId) =>
+    dataset.papers[paperId]?.authorNames ?? [],
+  ))].filter((name) => {
+    return !areLikelySameAuthorName(name, node.label)
+      && ![...visibleCollaboratorNames].some((visibleName) => areLikelySameAuthorName(name, visibleName))
+  })
+  const tierLabel = node.authorTier === 'core'
+    ? '核心作者'
+    : node.authorTier === 'bridge'
+      ? '桥接作者'
+      : '上下文作者'
 
   return (
     <section aria-label="作者详情">
       <h2 tabIndex={-1}>{displayValue(node.label)}</h2>
+      <DetailField label="网络角色" value={tierLabel} />
       <DetailField label="ORCID" value={detail.orcid} />
       <DetailField label="单位" value={detail.affiliations.join('、')} />
       <h3>论文</h3>
@@ -116,8 +138,30 @@ function AuthorDetail({ dataset, node, detail }: { dataset: GraphDataset; node: 
       ) : (
         <p>{EMPTY_VALUE}</p>
       )}
+      <h3>未展开合作者</h3>
+      <p>{hiddenCollaboratorNames.length
+        ? `${hiddenCollaboratorNames.length} 位（可在画布左下角展开）`
+        : '无'}</p>
     </section>
   )
+}
+
+function normalizedAuthorName(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+/** 与后端作者投影保持一致，识别省略或仅保留首字母的中间名。 */
+function areLikelySameAuthorName(left: string, right: string): boolean {
+  if (normalizedAuthorName(left) === normalizedAuthorName(right)) return true
+  const leftParts = left.normalize('NFKC').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+  const rightParts = right.normalize('NFKC').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+  if (leftParts.length < 2 || rightParts.length < 2) return false
+  if (leftParts[0] !== rightParts[0] || leftParts.at(-1) !== rightParts.at(-1)) return false
+  const leftMiddle = leftParts.slice(1, -1)
+  const rightMiddle = rightParts.slice(1, -1)
+  if (!leftMiddle.length || !rightMiddle.length) return true
+  return leftMiddle.length === rightMiddle.length
+    && leftMiddle.every((part, index) => part[0] === rightMiddle[index][0])
 }
 
 /** 展示论文的书目信息、期刊影响因子以及图谱提取结果。 */

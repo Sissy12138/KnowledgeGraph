@@ -28,6 +28,8 @@ type GraphSeries = {
       width?: number
       overflow?: string
     }
+    x?: number
+    y?: number
   }>
   links: Array<{
     id: string
@@ -46,6 +48,7 @@ function presentation(overrides: Partial<GraphPresentation> = {}): GraphPresenta
     highlightedNodeIds: new Set(),
     isSearchActive: false,
     contextConceptId: null,
+    contextMethodId: null,
     contextAuthorId: null,
     showRelatedAuthors: false,
     showRelatedConcepts: false,
@@ -148,7 +151,7 @@ describe('graph transforms', () => {
       ...conceptGraphMock,
       nodes: [
         ...conceptGraphMock.nodes,
-        { ...conceptGraphMock.nodes[0], id: 'concept-english', label: 'Reversal Learning' },
+        { ...conceptGraphMock.nodes[0], id: 'concept-english', label: '反转学习任务', englishLabel: 'Reversal Learning' },
       ],
     }
     const originalNodeIds = dataset.nodes.map((node) => node.id)
@@ -209,6 +212,13 @@ describe('graph transforms', () => {
     ).toBe(3)
   })
 
+  it('作者节点统一使用作者类型颜色，不用颜色暗示团队', () => {
+    const nodes = getGraphSeries(buildGraphOption(authorGraphMock, presentation())).data
+    const colors = new Set(nodes.map((node) => node.itemStyle.color))
+
+    expect(colors.size).toBe(1)
+  })
+
   it('保留所有节点，并降低未命中节点的透明度', () => {
     const option = buildGraphOption(conceptGraphMock, presentation({
       highlightedNodeIds: new Set(['concept-reversal-learning']),
@@ -245,6 +255,24 @@ describe('graph transforms', () => {
     expect(selected?.symbolSize).toBeLessThanOrEqual(60)
     expect(selected?.itemStyle.borderColor).toBe('#FFFFFF')
     expect(selected?.itemStyle.borderWidth).toBe(5)
+  })
+
+  it('全量节点较多时使用类型分区、隐藏常驻标签，并保留选中节点名称', () => {
+    const source = conceptGraphMock.nodes[0]
+    const nodes = Array.from({ length: 37 }, (_, index) => ({
+      ...source,
+      id: `dense-concept-${index}`,
+      label: `概念 ${index + 1}`,
+    }))
+    const denseDataset = { ...conceptGraphMock, nodes, edges: [] }
+    const graph = getGraphSeries(buildGraphOption(denseDataset, presentation({
+      selected: { kind: 'node', id: 'dense-concept-0' },
+    })))
+
+    expect(graph.layout).toBe('none')
+    expect(graph.data.filter((node) => node.label.show)).toHaveLength(1)
+    expect(graph.data[0]?.x).toEqual(expect.any(Number))
+    expect(graph.data[0]?.y).toEqual(expect.any(Number))
   })
 
   it('图例只包含可见节点类型，且图例和概念节点使用同一颜色', () => {
@@ -387,6 +415,25 @@ describe('graph transforms', () => {
     expect(graph.links.find((link) => link.id === 'edge-author-li-ming-author-wang-fang')?.lineStyle.opacity).toBe(0.12)
   })
 
+  it('方法网络按当前方法展开同源论文中的相关概念', () => {
+    const graph = getGraphSeries(buildGraphOption(methodGraphMock, presentation({
+      selected: { kind: 'node', id: 'method-fmri' },
+      contextMethodId: 'method-fmri',
+      showRelatedConcepts: true,
+    })))
+    const conceptIds = graph.data
+      .filter((node) => node.category === '概念')
+      .map((node) => node.id)
+
+    expect(conceptIds.sort()).toEqual([
+      'concept-cognitive-control',
+      'concept-learning',
+      'concept-reversal-learning',
+    ])
+    expect(graph.links.filter((link) => link.id.startsWith('edge-context-method-fmri-')))
+      .toHaveLength(3)
+  })
+
   it('文献引用图合并多个选中论文的相关概念，并只突出选择并集中的节点与边', () => {
     const paperPresentation = {
       ...presentation({ showRelatedConcepts: true }),
@@ -411,6 +458,19 @@ describe('graph transforms', () => {
     expect(graph.links.filter((link) => link.id.startsWith('edge-context-paper-'))).toHaveLength(5)
     expect(graph.links.find((link) => link.id === 'edge-paper-network-eeg')?.lineStyle.opacity)
       .toBe(0.12)
+  })
+
+  it('文献引用图可为选中论文独立展开相关方法', () => {
+    const graph = getGraphSeries(buildGraphOption(paperGraphMock, presentation({
+      selectedPaperIds: ['paper-002'],
+      showRelatedMethods: true,
+    })))
+    const methodIds = graph.data
+      .filter((node) => node.category === '方法')
+      .map((node) => node.id)
+
+    expect(methodIds.sort()).toEqual(['method-network-analysis', 'method-rl-model'])
+    expect(graph.data.some((node) => node.category === '概念')).toBe(false)
   })
 
   it('作者节点按总 JIF 平方根缩放到 20–60，最小节点只在悬停时显示姓名', () => {

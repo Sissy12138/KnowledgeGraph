@@ -44,6 +44,13 @@ const paperDetail: PaperDetail = {
     sample: '10 名参与者',
     methods: '测试方法',
     mainResults: '详情页面显示成功。',
+    original: {
+      researchTopics: ['Test topic'],
+      researchQuestion: 'Can the detail page display correctly?',
+      sample: '10 participants in two groups.',
+      methods: 'Test method',
+      mainResults: 'The detail page displayed correctly.',
+    },
   },
   createdAt: '2026-08-29T08:00:00Z',
   updatedAt: '2026-08-29T08:00:00Z',
@@ -93,6 +100,8 @@ describe('PaperDetailPage', () => {
       await screen.findByRole('heading', { name: '用于详情测试的论文' }),
     ).toBeInTheDocument()
     expect(screen.getByText('详情页面能否正确显示？')).toBeInTheDocument()
+    expect(screen.getByText('10 名参与者')).toBeInTheDocument()
+    expect(screen.getByText('样本及分组')).toBeInTheDocument()
     expect(screen.getByText('测试作者甲、测试作者乙')).toBeInTheDocument()
     expect(screen.getByText('测试期刊')).toBeInTheDocument()
     expect(screen.getByText('JIF 4.2（2024）')).toBeInTheDocument()

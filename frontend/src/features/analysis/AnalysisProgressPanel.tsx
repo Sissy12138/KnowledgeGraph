@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getAnalysisJob } from './analysis-job.service'
+import { loadAnalysisJob } from './analysis-job.service'
 import type { AnalysisJobLoader } from './analysis-job.service'
 import type { AnalysisJob, AnalysisStage } from './analysis-job.types'
 import './AnalysisProgressPanel.css'
@@ -31,7 +31,7 @@ const terminalStatuses = new Set(['completed', 'failed', 'cancelled'])
 /** 轮询解析任务，并将状态、阶段和进度显示为可访问的进度面板。 */
 export default function AnalysisProgressPanel({
   jobId,
-  loadJob = getAnalysisJob,
+  loadJob = loadAnalysisJob,
   pollIntervalMs = 1500,
 }: AnalysisProgressPanelProps) {
   const [viewState, setViewState] = useState<ViewState>({ status: 'loading' })
